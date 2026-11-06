@@ -1,0 +1,9 @@
+CLAUDE.md
+ALGORITHM.md
+.claude/
+.mcp.json
+build/
+subprojects/packagecache/
+subprojects/htslib-1.22/
+subprojects/quill-10.0.1/
+subprojects/unordered_dense-4.8.1/
