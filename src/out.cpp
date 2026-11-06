@@ -312,7 +312,7 @@ namespace ribbon {
     fprintf(f_out, "1 %d %d 0 %.6f\n", count_of(p.exons) + 1, p.tlen, p.cov);
 
     fprintf(f_out,
-            "%s\tStringTie\ttranscript\t%d\t%d\t1000\t%c\t.\t"
+            "%s\tribbon\ttranscript\t%d\t%d\t1000\t%c\t.\t"
             "gene_id \"%s\"; transcript_id \"%s\"; ",
             ref_name.c_str(), p.start, p.end, p.strand, gene_id.c_str(),
             transcript_id.c_str());
@@ -337,7 +337,7 @@ namespace ribbon {
     fprintf(f_out, "\n");
     for (int32_t j = 0; j < count_of(p.exons); j++) {
       fprintf(f_out,
-              "%s\tStringTie\texon\t%d\t%d\t1000\t%c\t.\t"
+              "%s\tribbon\texon\t%d\t%d\t1000\t%c\t.\t"
               "gene_id \"%s\"; transcript_id \"%s\"; exon_number \"%d\"; ",
               ref_name.c_str(), p.exons[j].start, p.exons[j].end, p.strand,
               gene_id.c_str(), transcript_id.c_str(), j + 1);
