@@ -1,10 +1,16 @@
 #include "ribbon.h"
+#include <map>
+#include <tuple>
 
 extern float multi_read_frac;
 // minimum number for a transcript to be printed
 extern int32_t min_transcript_len;
 // See drop_shadowed_paths in flow.cpp (off with --keep-shadowed-paths)
 extern bool drop_shadowed;
+// --sq3, and the deduplication it turns on (off with --keep-pcr-copies; see
+// weight_reads_by_molecule)
+extern bool smartseq3;
+extern bool dedup_pcr_copies;
 
 // The per-bundle assembly driver. infer_transcripts runs once for each bundle:
 // it turns the reads into read groups and pre-graphs of groups, builds one
@@ -198,26 +204,35 @@ namespace ribbon {
     }
   }
 
-  // Adds every read, or pair of reads, to the transfrags of its graph.
+  // Adds every read, or pair of reads, to the transfrags of its graph. Each
+  // fragment also carries its raw / deduplicated count (raw_scale, 1 unless
+  // weight_reads_by_molecule ran), for the raw coverage of the nodes.
   void fill_transfrags(BundleData *bundle, AssemblyState& state,
                        GraphTables& tables) {
     ReadList& reads = bundle->reads;
 
     for (int32_t n = 0; n < count_of(reads); n++) {
+      bool has_raw = reads[n]->read_count_raw >= 0;
       float single_count = reads[n]->read_count;
+      float single_raw = has_raw ? reads[n]->read_count_raw : 0;
       for (int32_t j = 0; j < count_of(reads[n]->pair_idx); j++) {
         int32_t np = reads[n]->pair_idx[j];
         if (np > -1) {
           single_count -= reads[n]->pair_count[j];
+          if (has_raw) single_raw -= reads[n]->pair_count_raw[j];
           if (n < np) {
+            float raw_scale = has_raw && reads[n]->pair_count[j] > 0
+                ? reads[n]->pair_count_raw[j] / reads[n]->pair_count[j] : 1;
             assign_fragment_to_transfrags(bundle, state, tables, n, np,
-                                          reads[n]->pair_count[j]);
+                                          reads[n]->pair_count[j], raw_scale);
           }
         }
       }
       if (single_count > epsilon) {
+        float raw_scale = has_raw ? std::max(1.0f, single_raw / single_count)
+                                  : 1;
         assign_fragment_to_transfrags(bundle, state, tables, n, -1,
-                                      single_count);
+                                      single_count, raw_scale);
       }
     }
   }
@@ -298,10 +313,106 @@ namespace ribbon {
     return gene_count;
   }
 
+  // The count of read i that is in none of its pairs (the code everywhere
+  // recomputes it as read_count minus the pair counts)
+  float unpaired_count(const ReadList& reads, int32_t i) {
+    float count = reads[i]->read_count;
+    for (int32_t j = 0; j < count_of(reads[i]->pair_idx); j++)
+      if (reads[i]->pair_idx[j] > -1) count -= reads[i]->pair_count[j];
+    return count > 0 ? count : 0.0f;
+  }
+
+  // Scales pair j of read i by factor, on both reads of the pair (the read and
+  // its mate each hold the pair's count), and their read_count with it, so
+  // that their unpaired counts do not change.
+  void scale_pair_count(ReadList& reads, int32_t i, int32_t j, float factor) {
+    int32_t mate = reads[i]->pair_idx[j];
+    float old_count = reads[i]->pair_count[j];
+    float new_count = old_count * factor;
+    reads[i]->pair_count[j] = new_count;
+    reads[i]->read_count -= old_count - new_count;
+    for (int32_t k = 0; k < count_of(reads[mate]->pair_idx); k++)
+      if (reads[mate]->pair_idx[k] == i) {
+        float old_mate_count = reads[mate]->pair_count[k];
+        float new_mate_count = old_mate_count * factor;
+        reads[mate]->pair_count[k] = new_mate_count;
+        reads[mate]->read_count -= old_mate_count - new_mate_count;
+        break;
+      }
+  }
+
+  // With --sq3: counts each molecule once instead of every PCR copy. Copies of
+  // a molecule share its UMI but not always their alignment (SmartSeq3
+  // amplifies full-length cDNA before tagmentation, so read 2 often differs),
+  // so a UMI molecule is (cell, UMI, strand) in the bundle: its reads weigh
+  // 1 / nh in total, shared over its pairs and unpaired reads in proportion to
+  // their counts. Internal reads (no UMI) can only be recognized as copies when
+  // the whole pair is identical: such a pair (folded in process_read_in)
+  // weighs at most 1 / nh. The counts before this are kept in read_count_raw
+  // and pair_count_raw (junction n_reads, filled at read time, stays raw).
+  void weight_reads_by_molecule(BundleData *bundle) {
+    if (!smartseq3 || !dedup_pcr_copies) return;
+    ReadList& reads = bundle->reads;
+    int32_t n_reads = count_of(reads);
+    for (auto& read : reads) {
+      read->read_count_raw = read->read_count;
+      read->pair_count_raw = read->pair_count;
+    }
+
+    // UMI molecules: the reads of each (cell, UMI, strand)
+    std::map<std::tuple<int32_t, std::string, char>, std::vector<int32_t>>
+        molecules;
+    for (int32_t i = 0; i < n_reads; i++)
+      if (!reads[i]->ub.empty())
+        molecules[{reads[i]->bc, reads[i]->ub, reads[i]->strand}].push_back(i);
+    for (auto& molecule : molecules) {
+      const std::vector<int32_t>& members = molecule.second;
+      // The molecule's total count: its pairs (each once) and unpaired reads
+      double total = 0;
+      int32_t min_nh = 1000;
+      auto counts_pair = [&](int32_t i, int32_t j) {
+        int32_t mate = reads[i]->pair_idx[j];
+        return mate > i || (mate > -1 && reads[mate]->ub != reads[i]->ub);
+      };
+      for (int32_t i : members) {
+        min_nh = std::min<int32_t>(min_nh, std::max<int32_t>(1, reads[i]->nh));
+        total += unpaired_count(reads, i);
+        for (int32_t j = 0; j < count_of(reads[i]->pair_idx); j++)
+          if (counts_pair(i, j)) total += reads[i]->pair_count[j];
+      }
+      if (total <= 0) continue;
+      // Never weigh a molecule up
+      float factor = std::min(1.0, (1.0 / min_nh) / total);
+      if (factor >= 1) continue;
+      for (int32_t i : members) {
+        float unpaired = unpaired_count(reads, i);
+        for (int32_t j = 0; j < count_of(reads[i]->pair_idx); j++)
+          if (counts_pair(i, j)) scale_pair_count(reads, i, j, factor);
+        reads[i]->read_count -= unpaired * (1 - factor);
+      }
+    }
+
+    // Internal reads: an identical pair, or the identical unpaired copies of a
+    // read, weigh at most 1 / nh
+    for (int32_t i = 0; i < n_reads; i++) {
+      if (!reads[i]->ub.empty()) continue;
+      float max_count = 1.0f / std::max<int32_t>(1, reads[i]->nh);
+      float unpaired = unpaired_count(reads, i);
+      for (int32_t j = 0; j < count_of(reads[i]->pair_idx); j++) {
+        int32_t mate = reads[i]->pair_idx[j];
+        if (mate > i && reads[mate]->ub.empty()
+            && reads[i]->pair_count[j] > max_count)
+          scale_pair_count(reads, i, j, max_count / reads[i]->pair_count[j]);
+      }
+      if (unpaired > max_count) reads[i]->read_count -= unpaired - max_count;
+    }
+  }
+
   // Assembles the transcripts of one bundle (called by process_bundle in
   // threads.cpp): finishes the junction support and coverage, then builds
   // the splice graphs and extracts the transcripts.
   void infer_transcripts(BundleData *bundle) {
+    weight_reads_by_molecule(bundle);
     compute_junction_support(bundle);
 
     ReadList& reads = bundle->reads;

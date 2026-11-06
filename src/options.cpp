@@ -45,6 +45,8 @@ extern float min_borrowed_share;
 extern bool drop_contradicted_paths;
 // --keep-shadowed-paths turns it off (see drop_shadowed_paths in flow.cpp)
 extern bool drop_shadowed;
+// --keep-pcr-copies turns it off (see weight_reads_by_molecule in core.cpp)
+extern bool dedup_pcr_copies;
 extern std::string label;
 extern bool QUIET;
 extern bool RIBBON_DEBUG;
@@ -95,6 +97,7 @@ namespace ribbon {
     bool demultiplex = false;
     bool keep_contradicted_paths = false;
     bool keep_shadowed_paths = false;
+    bool keep_pcr_copies = false;
 
     // Declare the command-line options.
     app.add_option("in.bam", in_files,
@@ -131,6 +134,10 @@ namespace ribbon {
                  "keep a novel path in a cell although each of the cell's "
                  "reads on it also fits a path with more pooled coverage "
                  "(default: the cell is taken off such paths)");
+    app.add_flag("--keep-pcr-copies", keep_pcr_copies,
+                 "with --sq3, count every read, PCR copies included (default: "
+                 "the copies of a UMI molecule, and identical internal pairs, "
+                 "count once)");
     app.add_option("--min-borrowed-share", min_borrowed_share,
                    "in each cell, drop a novel path that has a junction the "
                    "cell has no reads for, chosen from other cells' reads "
@@ -188,6 +195,7 @@ namespace ribbon {
     if (no_trim) trim_by_coverage = false;
     if (keep_contradicted_paths) drop_contradicted_paths = false;
     if (keep_shadowed_paths) drop_shadowed = false;
+    if (keep_pcr_copies) dedup_pcr_copies = false;
 
     // Check the combination of options and log the command line.
     if (fr_strand && rf_strand) {

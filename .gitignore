@@ -2,6 +2,7 @@ CLAUDE.md
 ALGORITHM.md
 .claude/
 .mcp.json
+tests/
 build/
 subprojects/packagecache/
 subprojects/htslib-1.22/

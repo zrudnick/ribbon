@@ -322,6 +322,13 @@ namespace ribbon {
                     predictions[p]->gene_no++;
                   predictions[p]->cell_cov[predictions[m]->cell] += predictions[m]->cov;
                 }
+                // The merged raw ratio: the mean of both, weighted by coverage
+                double merged_cov = predictions[p]->cov + predictions[m]->cov;
+                if (merged_cov > 0)
+                  predictions[p]->raw_ratio
+                      = (predictions[p]->cov * predictions[p]->raw_ratio
+                         + predictions[m]->cov * predictions[m]->raw_ratio)
+                        / merged_cov;
                 predictions[p]->cov += predictions[m]->cov;
                 for (int32_t k = 0; k < count_of(predictions[p]->exons); k++) {
                   predictions[p]->exon_cov[k] += predictions[m]->exon_cov[k];

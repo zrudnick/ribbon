@@ -557,10 +557,12 @@ namespace ribbon {
 
   // Adds the abundance of a read (or pair) with this node path to its
   // transfrag, creating it if needed, and to the cell coverage of the nodes
-  // it covers. Updates long_start and long_end; returns NULL for one node.
+  // it covers (and abundance x raw_scale to their raw coverage, see
+  // weight_reads_by_molecule). Updates long_start and long_end; returns NULL
+  // for one node.
   CTransfrag *add_read_abundance_to_transfrag(
       SpliceGraph& graph, std::vector<int32_t>& nodes, BitVec& path_bits,
-      float abundance, uint32_t read_start, uint32_t read_end,
+      float abundance, float raw_scale, uint32_t read_start, uint32_t read_end,
       int32_t cell_count, int32_t cell, uint32_t gap_start, uint32_t gap_end) {
     // Add the read's coverage in this cell to each node, without the bases it
     // does not cover (before its start, after its end or in the mate gap).
@@ -581,6 +583,7 @@ namespace ribbon {
       if (len < 0) len = 0;
 
       node->cell_cov[cell] += abundance * len;
+      node->cell_cov_raw[cell] += abundance * raw_scale * len;
     }
 
     // A path with one node is not worth keeping as a transfrag.
@@ -627,6 +630,8 @@ namespace ribbon {
     int32_t read_idx;
     int32_t mate_idx;
     float abundance; // the share of the fragment on this strand
+    // Raw / deduplicated count of the fragment (1 without --sq3)
+    float raw_scale;
     uint32_t read_start;
     uint32_t read_end;
     // Start/end of the inner gap between the two paired reads in the fragment
@@ -704,7 +709,8 @@ namespace ribbon {
     char strand = placement.strand;
     add_read_abundance_to_transfrag(
         tables.splice_graphs[strand][graph], nodes, path_bits,
-        placement.abundance, placement.read_start, placement.read_end,
+        placement.abundance, placement.raw_scale, placement.read_start,
+        placement.read_end,
         placement.cell_count, placement.cell, placement.gap_start,
         placement.gap_end);
   }
@@ -811,7 +817,7 @@ namespace ribbon {
   void assign_fragment_to_transfrags(BundleData *bundle,
                                      AssemblyState& state, GraphTables& tables,
                                      int32_t read_idx, int32_t mate_idx,
-                                     float read_coverage) {
+                                     float read_coverage, float raw_scale) {
     // The bundle's reads and groups, and the graphs they go into
     ReadList& reads = bundle->reads;
     int32_t cell_count = count_of(bundle->cell_name);
@@ -837,8 +843,9 @@ namespace ribbon {
     for (char strand : {'-', '+'})
       if (strand_prop[strand]) {
         FragmentPlacement placement = {reads, tables, strand, read_idx,
-            mate_idx, strand_prop[strand] * read_coverage, read_start,
-            read_end, gap_start, gap_end, cell_count, reads[read_idx]->bc};
+            mate_idx, strand_prop[strand] * read_coverage, raw_scale,
+            read_start, read_end, gap_start, gap_end, cell_count,
+            reads[read_idx]->bc};
 
         std::vector<int32_t> read_graphs;
         std::vector<std::vector<int32_t>> read_nodes(

@@ -19,6 +19,8 @@
 // Import globals from main program:
 
 extern FILE *f_out;
+// --sq3: cov is deduplicated and raw_cov is printed beside it
+extern bool smartseq3;
 extern std::string label;
 extern std::string tmp_fname; // temporary results file written by worker threads
 extern double total_frag_len;
@@ -318,6 +320,8 @@ namespace ribbon {
             transcript_id.c_str());
 
     fprintf(f_out, "cov \"%.6f\";", p.cov);
+    // With --sq3 cov is deduplicated; raw_cov counts every PCR copy
+    if (smartseq3) fprintf(f_out, " raw_cov \"%.6f\";", p.cov * p.raw_ratio);
 
     // Print cell coverages
     int32_t cells_with_coverage = 0;

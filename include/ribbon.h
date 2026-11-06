@@ -658,6 +658,10 @@ namespace ribbon {
     // Keeps count for all reads (including paired and unpaired)
     float read_count;
     std::vector<float> pair_count; // keeps count for all paired reads
+    // With --sq3: read_count and pair_count before PCR copies were folded (see
+    // weight_reads_by_molecule); read_count_raw < 0 when not set
+    float read_count_raw = -1;
+    std::vector<float> pair_count_raw;
     // Keeps indeces for all pairs in assembly mode, or all reads that were
     // collapsed in merge mode
     std::vector<int32_t> pair_idx;
@@ -746,6 +750,8 @@ namespace ribbon {
     // The graph path (node ids) the prediction came from, kept until the
     // graph's cells are done (see drop_shadowed_paths)
     std::vector<int32_t> path_nodes;
+    // Coverage before PCR copies were folded, divided by cov (1 without --sq3)
+    float raw_ratio = 1;
     // SCELL
     CPrediction(int32_t _gene_no = 0, GffObj *guide = NULL, int32_t _cell = -1,
                 int32_t g_start = 0, int32_t g_end = 0, double _cov = 0,
@@ -758,7 +764,8 @@ namespace ribbon {
         : GSeg(c.start, c.end), gene_no(c.gene_no), t_eq(c.t_eq), cell(c.cell),
           cov(c.cov), strand(c.strand), tlen(c.tlen), flag(c.flag),
           exons(c.exons), exon_cov(c.exon_cov), cell_cov(c.cell_cov),
-          flow_cov(c.flow_cov), path_nodes(c.path_nodes) {}
+          flow_cov(c.flow_cov), path_nodes(c.path_nodes),
+          raw_ratio(c.raw_ratio) {}
     ~CPrediction() { // GFREE(id);
     }
   };
@@ -1117,6 +1124,8 @@ namespace ribbon {
     int32_t node_id;
     float cov;
     std::vector<float> cell_cov; // SCELL defines single cell coverage of node
+    // The same before PCR copies were folded (equal to cell_cov without --sq3)
+    std::vector<float> cell_cov_raw;
     std::vector<int32_t> child;
     std::vector<int32_t> parent;
     // The nodes and edges that can be reached from this node going toward
@@ -1132,6 +1141,7 @@ namespace ribbon {
           child_reachable_bits(), parent_reachable_bits(), transfrag_ids() {
       // SCELL : set all cell coverages to 0 initially
       cell_cov.resize(cell_count, 0.0);
+      cell_cov_raw.resize(cell_count, 0.0);
     }
   };
 

@@ -315,6 +315,8 @@ namespace ribbon {
 
     // Collect the exons, their coverage and the transcript length.
     double cov = 0;
+    // The same before PCR copies were folded (see weight_reads_by_molecule)
+    double raw_cov = 0;
     int32_t len = 0;
     CGraphnode *prev_node = NULL;
     std::vector<GSeg> exons;
@@ -361,6 +363,13 @@ namespace ribbon {
       // Coverage that this path takes from the node.
       double used_coverage = node_coverage[path[i]] * node_flux[i]
           * (node->end - node->start + 1);
+      // The flow takes the same share of the node's raw coverage: the node is
+      // depleted by a share (node_coverage *= 1 - node_flux below), so its raw
+      // / deduplicated ratio does not change. Without --sq3 it is 1.
+      double node_raw_ratio = 1;
+      if (node->cell_cov[context.cell] > 0)
+        node_raw_ratio = node->cell_cov_raw[context.cell]
+                         / node->cell_cov[context.cell];
 
       uint32_t exon_start = node->start;
       uint32_t exon_end = node->end;
@@ -438,6 +447,7 @@ namespace ribbon {
       len += exon_end - exon_start + 1;
 
       cov += used_coverage;
+      raw_cov += used_coverage * node_raw_ratio;
       exon_coverage += used_coverage;
 
       prev_node = node;
@@ -450,6 +460,7 @@ namespace ribbon {
       exon_cov.push_back(exon_coverage_f);
     }
     if (len) cov /= len;
+    if (len) raw_cov /= len;
 
     // Store the transcript: always for a guide, otherwise only if it has
     // coverage and is at least min_transcript_len long.
@@ -464,12 +475,19 @@ namespace ribbon {
         set_guide_status(guide, GBST_STORED);
       // Check if prediction overlaps any previous predictions from same graph
       } else if (prev_prediction_count && count_of(predictions) > prev_prediction_count) {
-        for (int32_t p = prev_prediction_count; p < count_of(predictions); p++)
+        for (int32_t p = prev_prediction_count; p < count_of(predictions); p++) {
           // Check if this prediction is equal or included in a previous one
+          double old_cov = predictions[p]->cov;
           if (merge_if_equal_prediction(predictions[p].get(), exons, exon_cov)) {
+            // The merged raw ratio: the mean of both, weighted by coverage
+            double added_cov = predictions[p]->cov - old_cov;
+            if (added_cov > 0 && cov > 0)
+              predictions[p]->raw_ratio = (old_cov * predictions[p]->raw_ratio
+                  + added_cov * (raw_cov / cov)) / predictions[p]->cov;
             keep_prediction = false;
             break;
           }
+        }
       }
 
       if (keep_prediction) {
@@ -484,6 +502,7 @@ namespace ribbon {
         }
         p->exon_cov = exon_cov;
         p->path_nodes = path;
+        if (cov > 0) p->raw_ratio = raw_cov / cov;
 
         predictions.push_back(std::move(p));
         is_first_transcript = false;

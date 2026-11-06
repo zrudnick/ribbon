@@ -37,6 +37,9 @@ bool trim_by_coverage = true;
 // --sq3: SmartSeq3 data, where read 1 with a UMI has the orientation of the
 // transcript
 bool smartseq3 = false;
+// With --sq3, the copies of a UMI molecule and identical internal pairs count
+// once (weight_reads_by_molecule in core.cpp); --keep-pcr-copies: off
+bool dedup_pcr_copies = true;
 // Weight of the per-cell abundance in the path-selection score (see
 // extend_path)
 double alpha = 1;
