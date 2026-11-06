@@ -606,10 +606,34 @@ namespace ribbon {
     return true;
   }
 
+  // True if the cell has a read transfrag (no source or sink link, none made
+  // by guides) with abundance on any real node of path, from the abundances
+  // before the flow (original_cell_abundance).
+  bool has_cell_transfrag_on_path_nodes(
+      const FlowContext& context, const std::vector<int32_t>& path,
+      const std::vector<std::vector<float>>& original_cell_abundance,
+      int32_t cell) {
+    int32_t sink = context.graph.node_count - 1;
+    for (int32_t node : path) {
+      if (node == 0 || node == sink) continue;
+      for (int32_t t : context.graph.nodes[node]->transfrag_ids) {
+        const CTransfrag& tf = *context.graph.transfrag[t];
+        if (tf.made_by_guide || tf.nodes.empty() || !tf.nodes[0]
+            || tf.nodes.back() == sink)
+          continue;
+        if (original_cell_abundance[t][cell] > epsilon) return true;
+      }
+    }
+    return false;
+  }
+
   // Called once all cells of the graph have their paths: takes a cell off a
   // novel path (its own copy of the prediction is dropped) when the cell's
   // reads do not single it out: each transfrag of the cell that fits the path
-  // also fits another path of the graph with more of the cell's abundance. Uses the cell abundances from before the flow
+  // also fits another chain of the graph with more pooled coverage (a weak
+  // path is explained away by a chain that is strong in the pool, even one
+  // the cell does not have), or when no transfrag of the cell fits the path
+  // although some lie on its nodes. Uses the cell abundances from before the flow
   // (original_cell_abundance) and the paths of all cells and guides.
   void drop_shadowed_paths(
       const FlowContext& context,
@@ -720,19 +744,29 @@ namespace ribbon {
       int32_t k = chain_of_path[path_of_prediction[p]];
       int32_t cell = prediction->cell;
       float own = support(k, cell);
-      // Without any read transfrag of the cell on the whole path we cannot
-      // tell: the flow may have used the cell's share of the source and sink
-      // links (set in compute_cell_node_coverages), so the path is kept.
-      if (own <= epsilon) continue;
+      if (own <= epsilon) {
+        // No read transfrag of the cell fits the whole path. If the cell has
+        // read transfrags on the path's nodes, they all go another way: the
+        // cell is taken off the path. Otherwise its reads lie inside single
+        // nodes (they make no transfrag, only node coverage) and we cannot
+        // tell, so the path is kept.
+        if (has_cell_transfrag_on_path_nodes(
+                context, *paths[path_of_prediction[p]],
+                original_cell_abundance, cell))
+          prediction->flag = false;
+        continue;
+      }
       bool shadowed = true;
       {
         // Shadowed only if each of the cell's transfrags on the path is also
-        // on a path with more support in the cell
+        // on a chain with more pooled coverage. The cell's own support is not
+        // the measure: it counts reads shared with other chains once for each.
         for (int32_t t : transfrags_of_path[k]) {
           if (original_cell_abundance[t][cell] <= epsilon) continue;
           bool on_better_path = false;
           for (int32_t q : paths_of_transfrag[t])
-            if (q != k && can_shadow(q) && support(q, cell) > own) {
+            if (q != k && can_shadow(q)
+                && chain_coverage[q] > chain_coverage[k]) {
               on_better_path = true;
               break;
             }

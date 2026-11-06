@@ -129,7 +129,7 @@ namespace ribbon {
                  "at one of them (default: such paths are dropped)");
     app.add_flag("--keep-shadowed-paths", keep_shadowed_paths,
                  "keep a novel path in a cell although each of the cell's "
-                 "reads on it also fits a path with more of the cell's reads "
+                 "reads on it also fits a path with more pooled coverage "
                  "(default: the cell is taken off such paths)");
     app.add_option("--min-borrowed-share", min_borrowed_share,
                    "in each cell, drop a novel path that has a junction the "
