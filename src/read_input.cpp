@@ -286,6 +286,23 @@ namespace ribbon {
     } //<-- if mate is mapped on the same chromosome
   }
 
+  // Index of a stored read that this alignment is a copy of (same start,
+  // strand, cell, UMI, aligned blocks and deletions next to splice sites),
+  // or -1. Reads are sorted by start: only the last ones can start here.
+  int32_t find_identical_read(ReadList& reads, GSamRecord& brec, char strand,
+                              int32_t cell_id, const std::string& umi) {
+    for (int32_t i = count_of(reads) - 1;
+         i >= 0 && reads[i]->start == brec.start; i--) {
+      CReadAln& read = *reads[i];
+      if (read.strand != strand || read.bc != cell_id || read.ub != umi)
+        continue;
+      if (exon_match(read.segs, brec.exons)
+          && junction_deletions_match(&read, brec.juncsdel))
+        return i;
+    }
+    return -1;
+  }
+
   // Adds one BAM alignment to the bundle: builds its CReadAln (or updates the
   // identical read that it duplicates), registers its junctions and their
   // support and pairs it with its mate (process_pairs).
@@ -343,26 +360,11 @@ namespace ribbon {
       }
     }
 
-    // Look for an identical read among the reads that start at the same place.
-    bool match = false; // true if current read matches a previous read
-    int32_t read_idx = count_of(reads) - 1;
-
-    while (read_idx > -1 && reads[read_idx]->start == brec.start) {
-      // Reads with the same barcode and UMI are considered the same
-      if (reads[read_idx]->strand == strand
-          && reads[read_idx]->bc == cell_id
-          && reads[read_idx]->ub == (umi ? umi : "")) {
-        match = exon_match(reads[read_idx]->segs, brec.exons);
-        // DEL AWARE
-        if (match)
-          match = junction_deletions_match(reads[read_idx].get(),
-                                           brec.juncsdel);
-      }
-
-      // This way we make sure that we keep the n of the matching reads
-      if (match) break;
-      read_idx--;
-    }
+    // A copy of a stored read (same alignment, cell and UMI) adds to that
+    // read's count instead of making a new read. It still adds to read_count
+    // below: copies are folded, not deduplicated.
+    int32_t read_idx = find_identical_read(reads, brec, strand, cell_id,
+                                           umi ? umi : "");
 
     // Extend the bundle to this alignment and count it.
     if (bundle.end < curr_end) {
@@ -372,7 +374,7 @@ namespace ribbon {
     bundle.num_reads++; // number of reads gets increased no matter what
 
     // Set up a new read, or update the read that this alignment duplicates.
-    if (!match) { // if this is a new read we are seeing we need to set it up
+    if (read_idx < 0) { // a new read
 
       std::unique_ptr<CReadAln> new_read = std::make_unique<CReadAln>(
           strand, nh, cell_id, umi, brec.start, brec.end);
@@ -381,11 +383,10 @@ namespace ribbon {
 
       process_exons(read, brec, junction, aln_data, strand);
       reads.push_back(std::move(new_read));
-      read_idx = count_of(reads) - 1; // reset n for the case there is no match
-    } else { // redundant read alignment matching a previous alignment
-      // Keep shortest nh so that we can see for each particular read the
-      // multi-hit proportion
-      if (nh < reads[read_idx]->nh) reads[read_idx]->nh = nh;
+      read_idx = count_of(reads) - 1;
+    } else if (nh < reads[read_idx]->nh) {
+      // A copy keeps the smallest nh, so the multi-hit share is the best one
+      reads[read_idx]->nh = nh;
     }
 
     // Extend the end of the bundle if the alignment reaches past it.
