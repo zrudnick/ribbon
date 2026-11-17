@@ -44,6 +44,10 @@ bool dedup_pcr_copies = true;
 // its 5' end (drop_predictions_without_umi_starts in predictions.cpp);
 // --keep-paths-without-umi-starts: off
 bool require_umi_starts = true;
+// A novel multi-exon transcript needs distinct evidence for each junction
+// (drop_paths_with_weak_junctions in predictions.cpp);
+// --keep-weak-junction-paths: off
+bool require_junction_evidence = true;
 // Weight of the per-cell abundance in the path-selection score (see
 // extend_path)
 double alpha = 1;

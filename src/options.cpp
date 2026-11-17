@@ -50,6 +50,9 @@ extern bool dedup_pcr_copies;
 // --keep-paths-without-umi-starts turns it off (see
 // drop_predictions_without_umi_starts in predictions.cpp)
 extern bool require_umi_starts;
+// --keep-weak-junction-paths turns it off (see
+// drop_paths_with_weak_junctions in predictions.cpp)
+extern bool require_junction_evidence;
 extern std::string label;
 extern bool QUIET;
 extern bool RIBBON_DEBUG;
@@ -108,6 +111,7 @@ namespace ribbon {
     bool keep_shadowed_paths = false;
     bool keep_pcr_copies = false;
     bool keep_paths_without_umi_starts = false;
+    bool keep_weak_junction_paths = false;
 
     // Declare the command-line options.
     app.add_option("in.bam", in_files,
@@ -159,6 +163,12 @@ namespace ribbon {
                  "with --sq3, keep a novel multi-exon transcript although no "
                  "UMI molecule starts near its 5' end (default: such "
                  "transcripts are dropped)");
+    app.add_flag("--keep-weak-junction-paths", keep_weak_junction_paths,
+                 "keep a novel multi-exon transcript although one of its "
+                 "junctions has a single piece of distinct evidence over all "
+                 "cells (default: such transcripts are dropped; evidence = "
+                 "distinct read alignments, and with --sq3 UMI molecules "
+                 "instead of their reads)");
     app.add_option("--min-borrowed-share", min_borrowed_share,
                    "in each cell, drop a novel path that has a junction the "
                    "cell has no reads for, chosen from other cells' reads "
@@ -224,6 +234,7 @@ namespace ribbon {
     if (keep_shadowed_paths) drop_shadowed = false;
     if (keep_pcr_copies) dedup_pcr_copies = false;
     if (keep_paths_without_umi_starts) require_umi_starts = false;
+    if (keep_weak_junction_paths) require_junction_evidence = false;
 
     // Check the combination of options and log the command line.
     if (fr_strand && rf_strand) {

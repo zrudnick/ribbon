@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <tuple>
 #include <unordered_set>
@@ -26,6 +27,7 @@ extern float min_single_exon_coverage;  // minimum read coverage per bundle bp f
 extern float isoform_fraction;           // minimum coverage of a prediction as a fraction of the best one of its gene
 extern bool smartseq3;                   // --sq3: read 1 with a UMI starts at the 5' end of its molecule
 extern bool require_umi_starts;          // --sq3 rule, off with --keep-paths-without-umi-starts
+extern bool require_junction_evidence;   // off with --keep-weak-junction-paths
 
 namespace ribbon {
 
@@ -55,6 +57,11 @@ namespace ribbon {
   // end (see drop_predictions_without_umi_starts).
   const float min_umi_start_molecules = 1;
   const int32_t umi_start_window = 100;
+
+  // A novel multi-exon prediction needs min_junction_evidence distinct
+  // pieces of evidence, pooled over cells, for each of its junctions (see
+  // drop_paths_with_weak_junctions).
+  const int32_t min_junction_evidence = 2;
 
   // The 5' ends of the reads that are read 1 with a UMI (--sq3), on one
   // strand, sorted, with their weights (reads or molecules).
@@ -906,6 +913,53 @@ namespace ribbon {
     }
   }
 
+  // Drops the novel multi-exon predictions with a junction that has fewer
+  // than min_junction_evidence distinct pieces of evidence over all cells: a
+  // distinct read alignment (cell, start, end; identical copies are already
+  // one read), and with --sq3 a UMI molecule (cell, UMI, strand) instead of
+  // its reads. Most junctions seen once are noise on the real data
+  // (ribbon_data/benchmark/umi/README.md, lead 4). Reference ones are kept.
+  void drop_paths_with_weak_junctions(BundleData *bundle) {
+    if (!require_junction_evidence) return;
+    PredictionList& predictions = bundle->predictions;
+
+    // The junctions (exon end, next exon start) of the novel predictions
+    using Junction = std::pair<int32_t, int32_t>;
+    using Evidence = std::tuple<int32_t, int32_t, int32_t, std::string>;
+    std::map<Junction, std::set<Evidence>> evidence;
+    for (const auto& p : predictions) {
+      if (!p->flag || p->t_eq || count_of(p->exons) < 2) continue;
+      for (int32_t i = 0; i + 1 < count_of(p->exons); i++)
+        evidence[{p->exons[i].end, p->exons[i + 1].start}];
+    }
+    if (evidence.empty()) return;
+
+    // The evidence of each read for those junctions (the gaps between its
+    // aligned blocks)
+    for (const auto& read : bundle->reads) {
+      if (!read->nh || count_of(read->segs) < 2) continue;
+      bool is_molecule = smartseq3 && !read->ub.empty();
+      Evidence piece = is_molecule
+          ? Evidence(read->bc, -1, read->umi_strand, read->ub)
+          : Evidence(read->bc, read->start, read->end, "");
+      for (int32_t i = 0; i + 1 < count_of(read->segs); i++) {
+        auto it = evidence.find({read->segs[i].end, read->segs[i + 1].start});
+        if (it != evidence.end()) it->second.insert(piece);
+      }
+    }
+
+    // Drop the predictions with a weak junction
+    for (auto& p : predictions) {
+      if (!p->flag || p->t_eq || count_of(p->exons) < 2) continue;
+      for (int32_t i = 0; i + 1 < count_of(p->exons); i++)
+        if (count_of(evidence[{p->exons[i].end, p->exons[i + 1].start}])
+            < min_junction_evidence) {
+          p->flag = false;
+          break;
+        }
+    }
+  }
+
   // A UMI molecule of the bundle (--sq3): its cell, the strand its UMI gives,
   // the 5' end of its read 1, its weight (1 / nh) and its reads (read 1, read
   // 2 and the PCR copies).
@@ -1105,6 +1159,9 @@ namespace ribbon {
 
     // With --sq3, novel spliced transcripts need UMI molecules at their 5' end.
     drop_predictions_without_umi_starts(bundle);
+
+    // Novel spliced transcripts need distinct evidence for each junction.
+    drop_paths_with_weak_junctions(bundle);
 
     // With --sq3, the UMI molecules of each kept transcript and cell.
     count_molecules_of_predictions(bundle);
