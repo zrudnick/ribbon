@@ -654,6 +654,10 @@ namespace ribbon {
     // Read 1 of a pair (BAM flag); with --sq3 the start of a read 1 with a UMI
     // is the 5' end of its molecule (see drop_unsupported_single_exons)
     bool is_read1 = false;
+    // With --sq3, the strand that the read's UMI gave it when it was read
+    // ('.' for a read without a UMI). Grouping keeps it (has_umi_strand);
+    // the 5' counts use it (collect_umi_starts)
+    char umi_strand = '.';
     uint32_t len;
     // Keeps count for all reads (including paired and unpaired)
     float read_count;
@@ -681,6 +685,7 @@ namespace ribbon {
       bc = rd.bc; // SCELL
       ub = rd.ub; // SCELL
       is_read1 = rd.is_read1;
+      umi_strand = rd.umi_strand;
       len = rd.len;
       read_count = rd.read_count;
       pair_count = rd.pair_count;
@@ -752,6 +757,9 @@ namespace ribbon {
     std::vector<int32_t> path_nodes;
     // Coverage before PCR copies were folded, divided by cov (1 without --sq3)
     float raw_ratio = 1;
+    // With --sq3: the UMI molecules of each cell that start at the 5' end and
+    // fit the exons (see count_molecules_of_predictions); empty otherwise
+    std::vector<float> cell_molecules;
     // SCELL
     CPrediction(int32_t _gene_no = 0, GffObj *guide = NULL, int32_t _cell = -1,
                 int32_t g_start = 0, int32_t g_end = 0, double _cov = 0,
@@ -765,7 +773,7 @@ namespace ribbon {
           cov(c.cov), strand(c.strand), tlen(c.tlen), flag(c.flag),
           exons(c.exons), exon_cov(c.exon_cov), cell_cov(c.cell_cov),
           flow_cov(c.flow_cov), path_nodes(c.path_nodes),
-          raw_ratio(c.raw_ratio) {}
+          raw_ratio(c.raw_ratio), cell_molecules(c.cell_molecules) {}
     ~CPrediction() { // GFREE(id);
     }
   };
@@ -788,6 +796,12 @@ namespace ribbon {
     // TPM (see write_final_output)
     std::vector<double> cell_frag_len;
     std::vector<double> cell_sum_cov;
+    // The fragments placed into the transfrags of each cell, and the bases
+    // they added to the nodes (the units of a transcript's cov): a
+    // transcript's read count is its cov x length / (bases per fragment)
+    // (see assign_fragment_to_transfrags and QuantTables)
+    std::vector<double> cell_placed_fragments;
+    std::vector<double> cell_placed_bases;
 
     std::string ref_seq; // reference sequence name
     char *gseq; // actual genomic sequence for the bundle
@@ -928,6 +942,8 @@ namespace ribbon {
       sum_cov = 0;
       cell_frag_len.clear();
       cell_sum_cov.clear();
+      cell_placed_fragments.clear();
+      cell_placed_bases.clear();
       counts.reset();
       GFREE(gseq);
     }

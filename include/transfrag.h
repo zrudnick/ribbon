@@ -42,7 +42,8 @@ namespace ribbon {
   CTransfrag *add_read_abundance_to_transfrag(
       SpliceGraph& graph, std::vector<int32_t>& nodes, BitVec& path_bits,
       float abundance, float raw_scale, uint32_t read_start, uint32_t read_end,
-      int32_t cell_count, int32_t cell, uint32_t gap_start, uint32_t gap_end);
+      int32_t cell_count, int32_t cell, uint32_t gap_start, uint32_t gap_end,
+      double *placed_bases = nullptr);
 
   void assign_fragment_to_transfrags(BundleData *bundle,
                                      AssemblyState& state, GraphTables& tables,

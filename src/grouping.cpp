@@ -653,7 +653,14 @@ namespace ribbon {
     }
   }
 
-  // Unpairs a read from its mates, and unstrands a mate without junctions.
+  // True if the read's strand came from its UMI (--sq3): the library gives
+  // it, so it holds whatever the read's junctions or mates show.
+  bool has_umi_strand(const CReadAln& read) {
+    return read.umi_strand != '.';
+  }
+
+  // Unpairs a read from its mates, and unstrands a mate without junctions
+  // (unless the mate's strand came from its UMI).
   void unpair_read(ReadList& reads, int32_t read_idx) {
     CReadAln& read = *reads[read_idx];
     for (int32_t p = 0; p < count_of(read.pair_idx); p++) {
@@ -668,7 +675,9 @@ namespace ribbon {
           }
         // Remove strand for pair read if single exon ? is strand
         // assigned before here ?
-        if (!count_of(reads[mate_idx]->juncs)) reads[mate_idx]->strand = '.';
+        if (!count_of(reads[mate_idx]->juncs)
+            && !has_umi_strand(*reads[mate_idx]))
+          reads[mate_idx]->strand = '.';
       }
     }
   }
@@ -705,7 +714,8 @@ namespace ribbon {
               break;
             }
           }
-          if (!keep_strand) reads[mate_idx]->strand = '.';
+          if (!keep_strand && !has_umi_strand(*reads[mate_idx]))
+            reads[mate_idx]->strand = '.';
         }
       }
       if (keep_strand) break;
@@ -843,15 +853,18 @@ namespace ribbon {
         i++;
       }
 
-      // Read has bad junctions -> check if we need to unstrand it
-      if (!junctions_ok) {
-        if (read.strand != '.' && !has_stranded_junction(read))
-          read.strand = '.';
-      // Check if we need to unstrand current read due to future mapping
-      } else if (!count_of(read.juncs) && read.strand != '.') {
-        if (count_of(read.pair_idx)
-            && !mates_keep_strand(reads, read_idx, ref_start, bp_coverage))
-          read.strand = '.';
+      // Check whether we need to unstrand the read: a strand that came from
+      // its UMI (--sq3) is kept. With bad junctions it needs a stranded one.
+      if (!has_umi_strand(read)) {
+        if (!junctions_ok) {
+          if (read.strand != '.' && !has_stranded_junction(read))
+            read.strand = '.';
+        // Unspliced: a later mate has to support the strand
+        } else if (!count_of(read.juncs) && read.strand != '.') {
+          if (count_of(read.pair_idx)
+              && !mates_keep_strand(reads, read_idx, ref_start, bp_coverage))
+            read.strand = '.';
+        }
       }
 
       // Put the read in the groups of its strand.

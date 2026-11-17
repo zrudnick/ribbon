@@ -21,6 +21,10 @@ extern double total_frag_len;
 extern double total_cov_sum;
 extern std::map<std::string, double> frag_len_by_cell;
 extern std::map<std::string, double> cov_sum_by_cell;
+extern double total_placed_fragments;
+extern double total_placed_bases;
+extern std::map<std::string, double> placed_fragments_by_cell;
+extern std::map<std::string, double> placed_bases_by_cell;
 
 #ifndef NOTHREADS
 // Threading: single producer, multiple consumers
@@ -142,6 +146,13 @@ namespace ribbon {
           frag_len_by_cell[cell.first] += bundle->cell_frag_len[c];
         if (c < count_of(bundle->cell_sum_cov))
           cov_sum_by_cell[cell.first] += bundle->cell_sum_cov[c];
+        if (c < count_of(bundle->cell_placed_fragments)) {
+          placed_fragments_by_cell[cell.first]
+              += bundle->cell_placed_fragments[c];
+          placed_bases_by_cell[cell.first] += bundle->cell_placed_bases[c];
+          total_placed_fragments += bundle->cell_placed_fragments[c];
+          total_placed_bases += bundle->cell_placed_bases[c];
+        }
       }
     }
 

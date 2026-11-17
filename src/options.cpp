@@ -47,6 +47,9 @@ extern bool drop_contradicted_paths;
 extern bool drop_shadowed;
 // --keep-pcr-copies turns it off (see weight_reads_by_molecule in core.cpp)
 extern bool dedup_pcr_copies;
+// --keep-paths-without-umi-starts turns it off (see
+// drop_predictions_without_umi_starts in predictions.cpp)
+extern bool require_umi_starts;
 extern std::string label;
 extern bool QUIET;
 extern bool RIBBON_DEBUG;
@@ -54,6 +57,8 @@ extern quill::Logger *logger;
 // With --demultiplex: the directory where we write one GTF per cell (empty:
 // none), next to the output GTF
 extern std::string demultiplexed_dir;
+// With --quant: the directory of the per-cell read count tables (empty: none)
+extern std::string quant_dir;
 // Chromosomes/contigs to exclude (e.g. chrM), from -x
 extern std::unordered_set<std::string> excluded_seqs;
 extern int32_t n_threads;
@@ -95,9 +100,11 @@ namespace ribbon {
         cram_ref_path;
     bool no_trim = false;
     bool demultiplex = false;
+    bool quant = false;
     bool keep_contradicted_paths = false;
     bool keep_shadowed_paths = false;
     bool keep_pcr_copies = false;
+    bool keep_paths_without_umi_starts = false;
 
     // Declare the command-line options.
     app.add_option("in.bam", in_files,
@@ -119,6 +126,12 @@ namespace ribbon {
                  "also write one GTF per cell in the directory 'demultiplexed' "
                  "next to the output GTF, with the cell's own coverage, FPKM "
                  "and TPM for each transcript");
+    app.add_flag("--quant", quant,
+                 "also write one table of transcript read counts per cell "
+                 "(columns of oarfish: tname, len, num_reads; then tpm, cov "
+                 "and, with --sq3, molecules) in the directory 'quant' next "
+                 "to the output GTF, as <cell>.quant, and all cells together "
+                 "as pooled.quant");
     app.add_option("-l", label_str,
                    "name prefix for output transcripts (default: RBN)");
     app.add_option("-f", isoform_fraction,
@@ -138,6 +151,11 @@ namespace ribbon {
                  "with --sq3, count every read, PCR copies included (default: "
                  "the copies of a UMI molecule, and identical internal pairs, "
                  "count once)");
+    app.add_flag("--keep-paths-without-umi-starts",
+                 keep_paths_without_umi_starts,
+                 "with --sq3, keep a novel multi-exon transcript although no "
+                 "UMI molecule starts near its 5' end (default: such "
+                 "transcripts are dropped)");
     app.add_option("--min-borrowed-share", min_borrowed_share,
                    "in each cell, drop a novel path that has a junction the "
                    "cell has no reads for, chosen from other cells' reads "
@@ -196,6 +214,7 @@ namespace ribbon {
     if (keep_contradicted_paths) drop_contradicted_paths = false;
     if (keep_shadowed_paths) drop_shadowed = false;
     if (keep_pcr_copies) dedup_pcr_copies = false;
+    if (keep_paths_without_umi_starts) require_umi_starts = false;
 
     // Check the combination of options and log the command line.
     if (fr_strand && rf_strand) {
@@ -300,6 +319,17 @@ namespace ribbon {
       if (create_error) {
         fprintf(stderr, "Error creating directory %s: %s\n",
                 demultiplexed_dir.c_str(), create_error.message().c_str());
+        exit(1);
+      }
+    }
+    // The same for the read count tables of --quant.
+    if (quant) {
+      quant_dir = out_dir + "quant";
+      std::error_code create_error;
+      std::filesystem::create_directories(quant_dir, create_error);
+      if (create_error) {
+        fprintf(stderr, "Error creating directory %s: %s\n",
+                quant_dir.c_str(), create_error.message().c_str());
         exit(1);
       }
     }

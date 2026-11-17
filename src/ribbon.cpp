@@ -40,6 +40,10 @@ bool smartseq3 = false;
 // With --sq3, the copies of a UMI molecule and identical internal pairs count
 // once (weight_reads_by_molecule in core.cpp); --keep-pcr-copies: off
 bool dedup_pcr_copies = true;
+// With --sq3, a novel multi-exon transcript needs UMI molecules starting at
+// its 5' end (drop_predictions_without_umi_starts in predictions.cpp);
+// --keep-paths-without-umi-starts: off
+bool require_umi_starts = true;
 // Weight of the per-cell abundance in the path-selection score (see
 // extend_path)
 double alpha = 1;
@@ -99,9 +103,19 @@ double total_cov_sum = 0;
 // the per-cell FPKM and TPM
 std::map<std::string, double> frag_len_by_cell;
 std::map<std::string, double> cov_sum_by_cell;
+// The fragments placed into transfrags and the bases they added to the nodes,
+// in all and for each cell barcode: bases per fragment for the read counts of
+// --quant (see cell_placed_fragments)
+double total_placed_fragments = 0;
+double total_placed_bases = 0;
+std::map<std::string, double> placed_fragments_by_cell;
+std::map<std::string, double> placed_bases_by_cell;
 // With --demultiplex: the directory where we write one GTF per cell (empty:
 // none), next to the output GTF
 std::string demultiplexed_dir;
+// With --quant: the directory where we write one oarfish-style table of
+// transcript read counts per cell (empty: none), next to the output GTF
+std::string quant_dir;
 
 // Used as a dictionary for reference sequence names and ids
 GffNames *gseq_names = NULL;

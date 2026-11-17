@@ -1,7 +1,5 @@
-CLAUDE.md
-ALGORITHM.md
-.claude/
-.mcp.json
+*.claude/
+*.mcp.json
 tests/
 build/
 subprojects/packagecache/

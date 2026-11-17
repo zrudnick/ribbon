@@ -13,7 +13,8 @@
 // the output file (write_final_output). A transcript appears once, with its
 // coverage in every cell (`cell "name:coverage"`) and the number of cells.
 // With --demultiplex it also appears in the GTF of every cell that has it,
-// with the cell's own coverage, FPKM and TPM.
+// with the cell's own coverage, FPKM and TPM; with --quant in the read count
+// table of every cell that has it (QuantTables).
 // Which predictions are kept was already decided (see predictions.cpp).
 
 // Import globals from main program:
@@ -28,6 +29,12 @@ extern double total_cov_sum;
 extern std::map<std::string, double> frag_len_by_cell;
 extern std::map<std::string, double> cov_sum_by_cell;
 extern std::string demultiplexed_dir;
+// With --quant: one read count table per cell in this directory
+extern std::string quant_dir;
+extern double total_placed_fragments;
+extern double total_placed_bases;
+extern std::map<std::string, double> placed_fragments_by_cell;
+extern std::map<std::string, double> placed_bases_by_cell;
 
 namespace ribbon {
 
@@ -47,12 +54,13 @@ namespace ribbon {
     }
   };
 
-  // Reads the cells of a transcript from its first line: the `cell "name:cov"`
-  // attributes, in the order they are printed.
-  std::vector<std::pair<std::string, double>> parse_cell_coverages(
-      const std::string& transcript_line) {
+  // Reads per-cell values of a transcript from its first line: the
+  // `name "cell:value"` attributes (cell coverages by default), in the order
+  // they are printed.
+  std::vector<std::pair<std::string, double>> parse_cell_values(
+      const std::string& transcript_line, const std::string& name = "cell") {
     std::vector<std::pair<std::string, double>> cells;
-    const std::string attribute = " cell \"";
+    const std::string attribute = " " + name + " \"";
     size_t pos = 0;
     while ((pos = transcript_line.find(attribute, pos)) != std::string::npos) {
       pos += attribute.size();
@@ -115,38 +123,191 @@ namespace ribbon {
     }
   };
 
+  // A transcript's values in one cell: its coverage, FPKM, TPM and (with
+  // --sq3) UMI molecules.
+  struct CellValues {
+    std::string cell;
+    double cov = 0;
+    double fpkm = 0;
+    double tpm = 0;
+    double molecules = 0;
+  };
+
+  // The values of a transcript in each of its cells, from its first line. The
+  // TPM of a cell is normalized over the transcripts that we report for that
+  // cell, so it differs from the pooled TPM, whose total also counts the
+  // coverage that no transcript took.
+  std::vector<CellValues> cell_values_of(const std::string& transcript_line) {
+    // With --sq3: the cells' UMI molecules (a cell with none is not listed)
+    std::map<std::string, double> cell_molecules;
+    for (const auto& cell : parse_cell_values(transcript_line,
+                                              "cell_molecules"))
+      cell_molecules[cell.first] = cell.second;
+
+    std::vector<CellValues> cells;
+    for (const auto& cell : parse_cell_values(transcript_line)) {
+      CellValues values;
+      values.cell = cell.first;
+      values.cov = cell.second;
+      auto cell_frag_len = frag_len_by_cell.find(cell.first);
+      auto cell_cov_sum = cov_sum_by_cell.find(cell.first);
+      if (cell_frag_len != frag_len_by_cell.end()
+          && cell_frag_len->second > 0.001)
+        values.fpkm = values.cov * 1000000000 / cell_frag_len->second;
+      if (cell_cov_sum != cov_sum_by_cell.end()
+          && cell_cov_sum->second > 0.00001)
+        values.tpm = values.cov * 1000000 / cell_cov_sum->second;
+      auto molecules = cell_molecules.find(cell.first);
+      if (molecules != cell_molecules.end())
+        values.molecules = molecules->second;
+      cells.push_back(values);
+    }
+    return cells;
+  }
+
   // Writes a transcript (its first line and its exon lines) to the GTF of
-  // each of its cells. The first line gets the cell's own coverage, FPKM and
-  // TPM. The TPM of a cell is normalized over the transcripts that we report
-  // for that cell, so it differs from the pooled TPM, whose total also counts
-  // the coverage that no transcript took.
+  // each of its cells. The first line gets the cell's own coverage, molecules
+  // (with --sq3), FPKM and TPM.
   void write_transcript_to_cell_gtfs(CellGtfWriter& writer,
                                      const std::vector<std::string>& lines) {
-    std::vector<std::pair<std::string, double>> cells
-        = parse_cell_coverages(lines[0]);
+    std::vector<CellValues> cells = cell_values_of(lines[0]);
     // Everything of the first line before the pooled coverage
     size_t cov_start = lines[0].find(" cov \"");
     if (cells.empty() || cov_start == std::string::npos) return;
     std::string line_start = lines[0].substr(0, cov_start);
+    bool has_molecules = lines[0].find(" molecules \"") != std::string::npos;
 
-    for (const auto& cell : cells) {
-      double cell_cov = cell.second;
-      auto cell_frag_len = frag_len_by_cell.find(cell.first);
-      auto cell_cov_sum = cov_sum_by_cell.find(cell.first);
-      double fpkm = 0;
-      double tpm = 0;
-      if (cell_frag_len != frag_len_by_cell.end() && cell_frag_len->second > 0.001)
-        fpkm = cell_cov * 1000000000 / cell_frag_len->second;
-      if (cell_cov_sum != cov_sum_by_cell.end() && cell_cov_sum->second > 0.00001)
-        tpm = cell_cov * 1000000 / cell_cov_sum->second;
-
-      FILE *file = writer.file_of(cell.first);
-      fprintf(file, "%s cov \"%.6f\"; FPKM \"%.6f\"; TPM \"%.6f\";\n",
-              line_start.c_str(), cell_cov, fpkm, tpm);
+    for (const CellValues& cell : cells) {
+      FILE *file = writer.file_of(cell.cell);
+      fprintf(file, "%s cov \"%.6f\";", line_start.c_str(), cell.cov);
+      if (has_molecules)
+        fprintf(file, " molecules \"%.3f\";", cell.molecules);
+      fprintf(file, " FPKM \"%.6f\"; TPM \"%.6f\";\n", cell.fpkm, cell.tpm);
       for (size_t i = 1; i < lines.size(); i++)
         fprintf(file, "%s\n", lines[i].c_str());
     }
   }
+
+  // The value of attribute name (`name "value";`) in a GTF line, or "" if the
+  // line does not have it.
+  std::string gtf_attribute(const std::string& line, const std::string& name) {
+    const std::string key = " " + name + " \"";
+    size_t pos = line.find(key);
+    // The first attribute follows a tab, not a space
+    if (pos == std::string::npos) {
+      pos = line.find("\t" + name + " \"");
+      if (pos == std::string::npos) return "";
+    }
+    pos += key.size();
+    size_t end_quote = line.find('"', pos);
+    if (end_quote == std::string::npos) return "";
+    return line.substr(pos, end_quote - pos);
+  }
+
+  // The read count tables of --quant: one per cell and one for all cells
+  // (pooled.quant). The first columns are oarfish's (tname, len, num_reads),
+  // then tpm, cov and, with --sq3, molecules. A transcript is named by the
+  // reference transcript it matches, else by its own id; rows with the same
+  // name in a table (two transcripts that match one guide) are summed.
+  struct QuantTables {
+    struct Row {
+      std::string name;
+      int32_t len = 0;
+      double num_reads = 0;
+      double tpm = 0;
+      double cov = 0;
+      double molecules = 0;
+    };
+    struct Table {
+      std::vector<Row> rows;
+      std::map<std::string, size_t> row_of_name;
+    };
+    std::string dir;
+    bool has_molecules = false;
+    std::map<std::string, Table> cell_tables;
+    Table pooled;
+
+    explicit QuantTables(const std::string& d) : dir(d) {}
+
+    static void add(Table& table, const Row& row) {
+      auto it = table.row_of_name.find(row.name);
+      if (it == table.row_of_name.end()) {
+        table.row_of_name[row.name] = table.rows.size();
+        table.rows.push_back(row);
+        return;
+      }
+      Row& sum = table.rows[it->second];
+      sum.num_reads += row.num_reads;
+      sum.tpm += row.tpm;
+      sum.cov += row.cov;
+      sum.molecules += row.molecules;
+    }
+
+    // Adds a transcript from its first line (with the pooled TPM that
+    // write_final_output computed) to the pooled table and to the table of
+    // each of its cells. Reads = coverage x length / bases per fragment: the
+    // bases that the transcript took from the nodes, over the bases that a
+    // placed fragment adds to them on average (cell_placed_bases).
+    void add_transcript(const std::string& line, int32_t len,
+                        double pooled_cov, double pooled_tpm) {
+      Row row;
+      row.name = gtf_attribute(line, "reference_id");
+      if (row.name.empty()) row.name = gtf_attribute(line, "transcript_id");
+      row.len = len;
+      std::string molecules = gtf_attribute(line, "molecules");
+      if (!molecules.empty()) has_molecules = true;
+
+      // All cells together
+      Row pooled_row = row;
+      pooled_row.cov = pooled_cov;
+      pooled_row.tpm = pooled_tpm;
+      if (total_placed_bases > 0.001)
+        pooled_row.num_reads = pooled_cov * len * total_placed_fragments
+            / total_placed_bases;
+      pooled_row.molecules = molecules.empty() ? 0 : atof(molecules.c_str());
+      add(pooled, pooled_row);
+
+      // Each cell
+      for (const CellValues& cell : cell_values_of(line)) {
+        Row cell_row = row;
+        cell_row.cov = cell.cov;
+        cell_row.tpm = cell.tpm;
+        cell_row.molecules = cell.molecules;
+        auto bases = placed_bases_by_cell.find(cell.cell);
+        auto fragments = placed_fragments_by_cell.find(cell.cell);
+        if (bases != placed_bases_by_cell.end() && bases->second > 0.001
+            && fragments != placed_fragments_by_cell.end())
+          cell_row.num_reads = cell.cov * len * fragments->second
+              / bases->second;
+        add(cell_tables[cell.cell], cell_row);
+      }
+    }
+
+    void write_table(const std::string& name, const Table& table) const {
+      std::string path = dir + "/" + name + ".quant";
+      FILE *file = fopen(path.c_str(), "w");
+      if (!file) {
+        fprintf(stderr, "Error creating file %s\n", path.c_str());
+        exit(1);
+      }
+      fprintf(file, "tname\tlen\tnum_reads\ttpm\tcov%s\n",
+              has_molecules ? "\tmolecules" : "");
+      for (const Row& row : table.rows) {
+        fprintf(file, "%s\t%d\t%.6f\t%.6f\t%.6f", row.name.c_str(), row.len,
+                row.num_reads, row.tpm, row.cov);
+        if (has_molecules) fprintf(file, "\t%.3f", row.molecules);
+        fprintf(file, "\n");
+      }
+      fclose(file);
+    }
+
+    // Writes every table; a cell without transcripts gets a header only.
+    void write_all(const std::map<std::string, double>& all_cells) {
+      for (const auto& cell : all_cells) cell_tables[cell.first];
+      for (const auto& [cell, table] : cell_tables) write_table(cell, table);
+      write_table("pooled", pooled);
+    }
+  };
 
   // Final pass over the temporary results file: copies each transcript's lines
   // to f_out, adding FPKM and TPM to the first one (and writes it to the GTF of
@@ -156,6 +317,9 @@ namespace ribbon {
     std::unique_ptr<CellGtfWriter> cell_writer;
     if (!demultiplexed_dir.empty())
       cell_writer = std::make_unique<CellGtfWriter>(demultiplexed_dir);
+    std::unique_ptr<QuantTables> quant_tables;
+    if (!quant_dir.empty())
+      quant_tables = std::make_unique<QuantTables>(quant_dir);
     // Read the temporary file that the worker threads wrote.
     std::ifstream tmp_in(tmp_fname.c_str());
     if (tmp_in) {
@@ -200,6 +364,8 @@ namespace ribbon {
             }
             if (cell_writer) transcript_lines.push_back(line);
             if (!i) {
+              if (quant_tables)
+                quant_tables->add_transcript(line, transcript_len, cov, tpm);
               fprintf(f_out, "%s", line.c_str());
               fprintf(f_out, " FPKM \"%.6f\";", fpkm);
               fprintf(f_out, " TPM \"%.6f\";", tpm);
@@ -213,6 +379,8 @@ namespace ribbon {
 
       // Every cell gets a file, even one without transcripts.
       if (cell_writer) cell_writer->create_missing_files(frag_len_by_cell);
+      // The same for the read count tables.
+      if (quant_tables) quant_tables->write_all(frag_len_by_cell);
 
       // Close and delete the temporary file.
       fclose(f_out);
@@ -318,10 +486,23 @@ namespace ribbon {
             "gene_id \"%s\"; transcript_id \"%s\"; ",
             ref_name.c_str(), p.start, p.end, p.strand, gene_id.c_str(),
             transcript_id.c_str());
+    // The reference transcript (guide) that the transcript matches, and its
+    // gene
+    if (p.t_eq) {
+      fprintf(f_out, "reference_id \"%s\"; ", p.t_eq->getID());
+      if (p.t_eq->getGeneID())
+        fprintf(f_out, "ref_gene_id \"%s\"; ", p.t_eq->getGeneID());
+    }
 
     fprintf(f_out, "cov \"%.6f\";", p.cov);
-    // With --sq3 cov is deduplicated; raw_cov counts every PCR copy
-    if (smartseq3) fprintf(f_out, " raw_cov \"%.6f\";", p.cov * p.raw_ratio);
+    // With --sq3 cov is deduplicated; raw_cov counts every PCR copy, and
+    // molecules counts the UMI molecules that start at the 5' end
+    if (smartseq3) {
+      fprintf(f_out, " raw_cov \"%.6f\";", p.cov * p.raw_ratio);
+      double molecules = 0;
+      for (float cell_molecules : p.cell_molecules) molecules += cell_molecules;
+      fprintf(f_out, " molecules \"%.3f\";", molecules);
+    }
 
     // Print cell coverages
     int32_t cells_with_coverage = 0;
@@ -337,6 +518,12 @@ namespace ribbon {
     if (cells_with_coverage) {
       fprintf(f_out, " no_cells \"%d\";", cells_with_coverage);
     }
+
+    // With --sq3, the molecules of each cell that has the transcript and any
+    for (int32_t cell = 0; cell < count_of(p.cell_molecules); ++cell)
+      if (p.cell_cov[cell] > 0 && p.cell_molecules[cell] > 0)
+        fprintf(f_out, " cell_molecules \"%s:%.3f\";",
+                cell_names[cell]->c_str(), p.cell_molecules[cell]);
 
     fprintf(f_out, "\n");
     for (int32_t j = 0; j < count_of(p.exons); j++) {

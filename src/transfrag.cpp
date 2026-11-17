@@ -558,12 +558,13 @@ namespace ribbon {
   // Adds the abundance of a read (or pair) with this node path to its
   // transfrag, creating it if needed, and to the cell coverage of the nodes
   // it covers (and abundance x raw_scale to their raw coverage, see
-  // weight_reads_by_molecule). Updates long_start and long_end; returns NULL
-  // for one node.
+  // weight_reads_by_molecule), and the bases it adds to placed_bases if
+  // given. Updates long_start and long_end; returns NULL for one node.
   CTransfrag *add_read_abundance_to_transfrag(
       SpliceGraph& graph, std::vector<int32_t>& nodes, BitVec& path_bits,
       float abundance, float raw_scale, uint32_t read_start, uint32_t read_end,
-      int32_t cell_count, int32_t cell, uint32_t gap_start, uint32_t gap_end) {
+      int32_t cell_count, int32_t cell, uint32_t gap_start, uint32_t gap_end,
+      double *placed_bases) {
     // Add the read's coverage in this cell to each node, without the bases it
     // does not cover (before its start, after its end or in the mate gap).
     for (int32_t i = 0; i < count_of(nodes); i++) {
@@ -584,6 +585,7 @@ namespace ribbon {
 
       node->cell_cov[cell] += abundance * len;
       node->cell_cov_raw[cell] += abundance * raw_scale * len;
+      if (placed_bases) *placed_bases += abundance * len;
     }
 
     // A path with one node is not worth keeping as a transfrag.
@@ -639,6 +641,8 @@ namespace ribbon {
     uint32_t gap_end;
     int32_t cell_count;
     int32_t cell;
+    // The bases the fragment adds to the nodes (see cell_placed_bases)
+    double *placed_bases;
   };
 
   // Sets the share of a fragment (a read and its mate, if any) for each strand
@@ -712,7 +716,7 @@ namespace ribbon {
         placement.abundance, placement.raw_scale, placement.read_start,
         placement.read_end,
         placement.cell_count, placement.cell, placement.gap_start,
-        placement.gap_end);
+        placement.gap_end, placement.placed_bases);
   }
 
   // Sets the path_bits of the mate's nodes in the graph: the nodes, and the
@@ -838,6 +842,12 @@ namespace ribbon {
     PerStrand<float> strand_prop;
     compute_strand_prop(reads, state, read_idx, mate_idx, strand_prop);
 
+    // The fragment's cell counts the fragment and the bases it adds to the
+    // nodes, for the read counts of --quant (a fragment that reaches no node
+    // is not counted)
+    int32_t cell = reads[read_idx]->bc;
+    double placed_bases = 0;
+
     // For each strand that gets a share of the fragment, get the nodes that the
     // read and its mate touch in each graph.
     for (char strand : {'-', '+'})
@@ -845,7 +855,7 @@ namespace ribbon {
         FragmentPlacement placement = {reads, tables, strand, read_idx,
             mate_idx, strand_prop[strand] * read_coverage, raw_scale,
             read_start, read_end, gap_start, gap_end, cell_count,
-            reads[read_idx]->bc};
+            reads[read_idx]->bc, &placed_bases};
 
         std::vector<int32_t> read_graphs;
         std::vector<std::vector<int32_t>> read_nodes(
@@ -937,6 +947,17 @@ namespace ribbon {
               add_path_bits(placement, mate_graphs[p], mate_path_bits,
                           mate_nodes[p]);
             }
+
+        // Count the strand's share of the fragment once, if it reached a node
+        if (placed_bases > 0 && cell >= 0) {
+          if (cell >= count_of(bundle->cell_placed_fragments)) {
+            bundle->cell_placed_fragments.resize(cell + 1, 0.0);
+            bundle->cell_placed_bases.resize(cell + 1, 0.0);
+          }
+          bundle->cell_placed_fragments[cell] += placement.abundance;
+          bundle->cell_placed_bases[cell] += placed_bases;
+          placed_bases = 0;
+        }
       }
   }
 

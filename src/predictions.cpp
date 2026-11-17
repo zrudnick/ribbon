@@ -1,7 +1,9 @@
 #include "predictions.h"
 #include <algorithm>
+#include <map>
 #include <memory>
 #include <string>
+#include <tuple>
 #include <unordered_set>
 #include <vector>
 #include "ribbon.h"
@@ -23,6 +25,7 @@ extern float min_read_coverage;         // minimum read coverage per bundle bp f
 extern float min_single_exon_coverage;  // minimum read coverage per bundle bp for a single-exon transcript
 extern float isoform_fraction;           // minimum coverage of a prediction as a fraction of the best one of its gene
 extern bool smartseq3;                   // --sq3: read 1 with a UMI starts at the 5' end of its molecule
+extern bool require_umi_starts;          // --sq3 rule, off with --keep-paths-without-umi-starts
 
 namespace ribbon {
 
@@ -45,12 +48,18 @@ namespace ribbon {
   const float min_single_exon_umi_starts = 3;
   const int32_t single_exon_start_window = 50;
 
+  // With --sq3 a novel multi-exon prediction needs min_umi_start_molecules
+  // UMI molecules whose read 1 starts within umi_start_window bp of its 5'
+  // end (see drop_predictions_without_umi_starts).
+  const float min_umi_start_molecules = 1;
+  const int32_t umi_start_window = 100;
+
   // The 5' ends of the reads that are read 1 with a UMI (--sq3), on one
-  // strand, sorted, with their read counts.
+  // strand, sorted, with their weights (reads or molecules).
   struct ReadStarts {
     std::vector<std::pair<int32_t, float>> by_position;
 
-    // Total read count of the starts within window bp of position.
+    // Total weight of the starts within window bp of position.
     float count_near(int32_t position, int32_t window) const {
       auto lo = std::lower_bound(by_position.begin(), by_position.end(),
                                  std::make_pair(position - window, -1.0f));
@@ -749,6 +758,40 @@ namespace ribbon {
     }
   }
 
+  // The 5' ends of the bundle's UMI read 1s (--sq3), per strand. Weighted by
+  // read count, or with by_molecule by molecule: each (cell, UMI) counts once
+  // per 5' end, 1 / nh for a multi-mapped one. The strand is the one the UMI
+  // gave the read (umi_strand).
+  PerStrand<ReadStarts> collect_umi_starts(BundleData *bundle,
+                                           bool by_molecule) {
+    PerStrand<ReadStarts> umi_starts;
+    // (5' end, cell, UMI) -> weight, for by_molecule
+    PerStrand<std::map<std::tuple<int32_t, int32_t, std::string>, float>>
+        molecules;
+    for (const auto& read : bundle->reads) {
+      if (read->ub.empty() || !read->is_read1) continue;
+      char strand = read->umi_strand;
+      if (strand != '+' && strand != '-') continue;
+      int32_t five_prime = strand == '+' ? read->start : read->end;
+      if (!by_molecule) {
+        umi_starts[strand].by_position.push_back(
+            {five_prime, read->read_count});
+        continue;
+      }
+      float& weight = molecules[strand][{five_prime, read->bc, read->ub}];
+      weight = std::max(weight, 1.0f / std::max<int16_t>(read->nh, 1));
+    }
+
+    // The molecules, then sort each strand by position
+    for (char strand : {'-', '+'}) {
+      for (const auto& [key, weight] : molecules[strand])
+        umi_starts[strand].by_position.push_back({std::get<0>(key), weight});
+      std::sort(umi_starts[strand].by_position.begin(),
+                umi_starts[strand].by_position.end());
+    }
+    return umi_starts;
+  }
+
   // Coverage (all reads, per bp summed) of the genomic region [start, end],
   // clipped to the bundle: outside the bundle there are no reads.
   double bundle_region_coverage(BundleData *bundle, int64_t start,
@@ -792,18 +835,7 @@ namespace ribbon {
 
     // With --sq3: the 5' ends of the UMI read 1s of each strand
     PerStrand<ReadStarts> umi_starts;
-    if (smartseq3) {
-      for (const auto& read : bundle->reads) {
-        if (read->ub.empty() || !read->is_read1) continue;
-        if (read->strand != '+' && read->strand != '-') continue;
-        int32_t five_prime = read->strand == '+' ? read->start : read->end;
-        umi_starts[read->strand].by_position.push_back(
-            {five_prime, read->read_count});
-      }
-      for (char strand : {'-', '+'})
-        std::sort(umi_starts[strand].by_position.begin(),
-                  umi_starts[strand].by_position.end());
-    }
+    if (smartseq3) umi_starts = collect_umi_starts(bundle, false);
 
     for (auto& p : predictions) {
       if (!p->flag || p->t_eq || count_of(p->exons) != 1) continue;
@@ -818,6 +850,170 @@ namespace ribbon {
                 single_exon_start_window) < min_single_exon_umi_starts)
           p->flag = false;
       }
+    }
+  }
+
+  // With --sq3, drops the novel multi-exon predictions with too few UMI
+  // molecules starting at their 5' end (min_umi_start_molecules). On the real
+  // data most of them are fragments that start inside a later exon or far from
+  // any annotated start (ribbon_data/benchmark/umi/tss/README.md).
+  void drop_predictions_without_umi_starts(BundleData *bundle) {
+    if (!smartseq3 || !require_umi_starts) return;
+    PredictionList& predictions = bundle->predictions;
+    bool any = false;
+    for (const auto& p : predictions)
+      if (p->flag && !p->t_eq && count_of(p->exons) > 1) any = true;
+    if (!any) return;
+
+    PerStrand<ReadStarts> umi_starts = collect_umi_starts(bundle, true);
+    for (auto& p : predictions) {
+      if (!p->flag || p->t_eq || count_of(p->exons) < 2) continue;
+      if (p->strand != '+' && p->strand != '-') continue;
+      int32_t five_prime = p->strand == '+' ? p->exons.front().start
+                                            : p->exons.back().end;
+      if (umi_starts[p->strand].count_near(five_prime, umi_start_window)
+          < min_umi_start_molecules)
+        p->flag = false;
+    }
+  }
+
+  // A UMI molecule of the bundle (--sq3): its cell, the strand its UMI gives,
+  // the 5' end of its read 1, its weight (1 / nh) and its reads (read 1, read
+  // 2 and the PCR copies).
+  struct UmiMolecule {
+    int32_t cell = -1;
+    char strand = '.';
+    int32_t five_prime = -1;
+    float weight = 0;
+    std::vector<const CReadAln *> reads;
+  };
+
+  // The UMI molecules of the bundle, one per (cell, UMI, strand), as in
+  // weight_reads_by_molecule. A molecule's 5' end is the most common 5' end
+  // of its read 1s (copies usually share it); one without a read 1 here has
+  // five_prime -1.
+  std::vector<UmiMolecule> collect_umi_molecules(BundleData *bundle) {
+    std::map<std::tuple<int32_t, std::string, char>, UmiMolecule> by_key;
+    std::map<std::tuple<int32_t, std::string, char>,
+             std::map<int32_t, float>> read1_ends;
+    for (const auto& read : bundle->reads) {
+      if (read->ub.empty()) continue;
+      if (read->umi_strand != '+' && read->umi_strand != '-') continue;
+      auto key = std::make_tuple(read->bc, read->ub, read->umi_strand);
+      UmiMolecule& molecule = by_key[key];
+      molecule.cell = read->bc;
+      molecule.strand = read->umi_strand;
+      molecule.weight = std::max(molecule.weight,
+                                 1.0f / std::max<int16_t>(read->nh, 1));
+      molecule.reads.push_back(read.get());
+      if (read->is_read1) {
+        int32_t five_prime = read->umi_strand == '+' ? read->start : read->end;
+        read1_ends[key][five_prime] += read->read_count;
+      }
+    }
+
+    // The most common read 1 end of each molecule is its 5' end
+    std::vector<UmiMolecule> molecules;
+    for (auto& [key, molecule] : by_key) {
+      float best = 0;
+      for (const auto& [five_prime, count] : read1_ends[key])
+        if (count > best) {
+          best = count;
+          molecule.five_prime = five_prime;
+        }
+      molecules.push_back(std::move(molecule));
+    }
+    return molecules;
+  }
+
+  // True if the read lies on the exons of p: each aligned block inside one
+  // exon, and each gap between blocks exactly an intron of p (between two
+  // consecutive exons). The read's first block may start before p's first
+  // exon and its last block may end after p's last exon (the 5' read can
+  // start a little upstream of the transcript).
+  bool read_fits_prediction(const CReadAln& read, const CPrediction& p) {
+    int32_t exon_count = count_of(p.exons);
+    int32_t block_count = count_of(read.segs);
+    int32_t prev_exon = -1;
+    for (int32_t b = 0; b < block_count; b++) {
+      const GSeg& block = read.segs[b];
+      // The exon that the block overlaps
+      int32_t e = 0;
+      while (e < exon_count && p.exons[e].end < block.start) e++;
+      if (e == exon_count || p.exons[e].start > block.end) return false;
+
+      // Inside the exon, except outward at the transcript's two ends
+      bool open_left = b == 0 && e == 0;
+      bool open_right = b == block_count - 1 && e == exon_count - 1;
+      if (block.start < p.exons[e].start && !open_left) return false;
+      if (block.end > p.exons[e].end && !open_right) return false;
+
+      // The gap before the block is the intron before exon e
+      if (b > 0) {
+        if (e != prev_exon + 1) return false;
+        if (read.segs[b - 1].end != p.exons[e - 1].end
+            || block.start != p.exons[e].start)
+          return false;
+      }
+      prev_exon = e;
+    }
+    return block_count > 0;
+  }
+
+  // With --sq3, counts for each kept prediction and cell the UMI molecules
+  // that start within umi_start_window bp of its 5' end and whose reads all
+  // fit its exons (cell_molecules). A molecule that fits several predictions
+  // of its cell is split in proportion to their coverage in that cell; one
+  // that fits none is not counted.
+  void count_molecules_of_predictions(BundleData *bundle) {
+    if (!smartseq3) return;
+    PredictionList& predictions = bundle->predictions;
+    int32_t cell_count = count_of(bundle->cell_name);
+
+    // The kept predictions of each strand, by 5' end
+    PerStrand<std::vector<std::pair<int32_t, int32_t>>> by_five_prime;
+    for (int32_t p = 0; p < count_of(predictions); p++) {
+      CPrediction& prediction = *predictions[p];
+      if (!prediction.flag || prediction.exons.empty()) continue;
+      if (prediction.strand != '+' && prediction.strand != '-') continue;
+      int32_t five_prime = prediction.strand == '+'
+          ? prediction.exons.front().start : prediction.exons.back().end;
+      by_five_prime[prediction.strand].push_back({five_prime, p});
+      prediction.cell_molecules.assign(cell_count, 0);
+    }
+    for (char strand : {'-', '+'})
+      std::sort(by_five_prime[strand].begin(), by_five_prime[strand].end());
+
+    for (const UmiMolecule& molecule : collect_umi_molecules(bundle)) {
+      if (molecule.five_prime < 0) continue;
+      const auto& starts = by_five_prime[molecule.strand];
+      auto it = std::lower_bound(starts.begin(), starts.end(),
+          std::make_pair(molecule.five_prime - umi_start_window, -1));
+
+      // The predictions of the molecule's cell that it fits
+      std::vector<int32_t> fitting;
+      double fitting_cov = 0;
+      for (; it != starts.end()
+           && it->first <= molecule.five_prime + umi_start_window; ++it) {
+        CPrediction& prediction = *predictions[it->second];
+        if (molecule.cell >= count_of(prediction.cell_cov)
+            || prediction.cell_cov[molecule.cell] <= 0)
+          continue;
+        bool fits = true;
+        for (const CReadAln *read : molecule.reads)
+          if (!read_fits_prediction(*read, prediction)) {
+            fits = false;
+            break;
+          }
+        if (!fits) continue;
+        fitting.push_back(it->second);
+        fitting_cov += prediction.cell_cov[molecule.cell];
+      }
+
+      // Split the molecule by the predictions' coverage in the cell
+      for (int32_t p : fitting)
+        predictions[p]->cell_molecules[molecule.cell] += molecule.weight
+            * predictions[p]->cell_cov[molecule.cell] / fitting_cov;
     }
   }
 
@@ -849,6 +1045,12 @@ namespace ribbon {
 
     // Single exons need coverage of their own (and 5' reads with --sq3).
     drop_unsupported_single_exons(bundle);
+
+    // With --sq3, novel spliced transcripts need UMI molecules at their 5' end.
+    drop_predictions_without_umi_starts(bundle);
+
+    // With --sq3, the UMI molecules of each kept transcript and cell.
+    count_molecules_of_predictions(bundle);
   }
 
 } // namespace ribbon
