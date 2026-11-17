@@ -989,42 +989,70 @@ namespace ribbon {
     return block_count > 0;
   }
 
+  // The window where a molecule's 5' end may start for a prediction: from
+  // umi_start_window bp upstream of its 5' end to the end of its first exon
+  // (the start of its last exon on '-'), so that a molecule counts even where
+  // the prediction's 5' end is placed upstream of the true start.
+  struct StartWindow {
+    int32_t lo;
+    int32_t hi;
+    int32_t p;
+    bool operator<(const StartWindow& o) const { return lo < o.lo; }
+  };
+
   // With --sq3, counts for each kept prediction and cell the UMI molecules
-  // that start within umi_start_window bp of its 5' end and whose reads all
-  // fit its exons (cell_molecules). A molecule that fits several predictions
-  // of its cell is split in proportion to their coverage in that cell; one
-  // that fits none is not counted.
+  // whose 5' end lies in its StartWindow and whose reads all fit its exons
+  // (cell_molecules). A molecule that fits several predictions of its cell is
+  // split in proportion to their coverage in that cell; one that fits none is
+  // not counted. With --tso-filter, molecules marked as TSO strand invasion
+  // are not counted.
   void count_molecules_of_predictions(BundleData *bundle) {
     if (!smartseq3) return;
     PredictionList& predictions = bundle->predictions;
     int32_t cell_count = count_of(bundle->cell_name);
 
-    // The kept predictions of each strand, by 5' end
-    PerStrand<std::vector<std::pair<int32_t, int32_t>>> by_five_prime;
+    // The windows of the kept predictions of each strand, sorted by their
+    // start, and the longest window (to bound the search)
+    PerStrand<std::vector<StartWindow>> windows;
+    PerStrand<int32_t> longest(0);
     for (int32_t p = 0; p < count_of(predictions); p++) {
       CPrediction& prediction = *predictions[p];
       if (!prediction.flag || prediction.exons.empty()) continue;
-      if (prediction.strand != '+' && prediction.strand != '-') continue;
-      int32_t five_prime = prediction.strand == '+'
-          ? prediction.exons.front().start : prediction.exons.back().end;
-      by_five_prime[prediction.strand].push_back({five_prime, p});
+      char strand = prediction.strand;
+      if (strand != '+' && strand != '-') continue;
+      StartWindow window;
+      if (strand == '+') {
+        window.lo = prediction.exons.front().start - umi_start_window;
+        window.hi = prediction.exons.front().end;
+      } else {
+        window.lo = prediction.exons.back().start;
+        window.hi = prediction.exons.back().end + umi_start_window;
+      }
+      window.p = p;
+      windows[strand].push_back(window);
+      longest[strand] = std::max(longest[strand], window.hi - window.lo);
       prediction.cell_molecules.assign(cell_count, 0);
     }
     for (char strand : {'-', '+'})
-      std::sort(by_five_prime[strand].begin(), by_five_prime[strand].end());
+      std::sort(windows[strand].begin(), windows[strand].end());
 
     for (const UmiMolecule& molecule : collect_umi_molecules(bundle)) {
       if (molecule.five_prime < 0) continue;
-      const auto& starts = by_five_prime[molecule.strand];
-      auto it = std::lower_bound(starts.begin(), starts.end(),
-          std::make_pair(molecule.five_prime - umi_start_window, -1));
+      if (is_tso_strand_invasion(bundle, molecule.strand, molecule.five_prime))
+        continue;
+      const auto& strand_windows = windows[molecule.strand];
+      StartWindow first = {molecule.five_prime - longest[molecule.strand], 0,
+                           -1};
+      auto it = std::lower_bound(strand_windows.begin(), strand_windows.end(),
+                                 first);
 
       // The predictions of the molecule's cell that it fits
       std::vector<int32_t> fitting;
       double fitting_cov = 0;
-      for (; it != starts.end()
-           && it->first <= molecule.five_prime + umi_start_window; ++it) {
-        CPrediction& prediction = *predictions[it->second];
+      for (; it != strand_windows.end() && it->lo <= molecule.five_prime;
+           ++it) {
+        if (it->hi < molecule.five_prime) continue;
+        CPrediction& prediction = *predictions[it->p];
         if (molecule.cell >= count_of(prediction.cell_cov)
             || prediction.cell_cov[molecule.cell] <= 0)
           continue;
@@ -1035,7 +1063,7 @@ namespace ribbon {
             break;
           }
         if (!fits) continue;
-        fitting.push_back(it->second);
+        fitting.push_back(it->p);
         fitting_cov += prediction.cell_cov[molecule.cell];
       }
 

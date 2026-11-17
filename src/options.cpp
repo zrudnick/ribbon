@@ -195,8 +195,8 @@ namespace ribbon {
                    "with --sq3, the genome (FASTA) used to recognize TSO "
                    "strand invasion: a UMI molecule with GGG in the 4 bases "
                    "upstream of its 5' end does not count as a transcript "
-                   "start in the single-exon test (does not turn on the "
-                   "splice-motif checks of -S)");
+                   "start in the single-exon test or in the molecule counts "
+                   "(does not turn on the splice-motif checks of -S)");
     app.add_option("--ref,--cram-ref", cram_ref_path,
                    "reference genome FASTA file for CRAM input");
     auto version_callback = [](int32_t) {
