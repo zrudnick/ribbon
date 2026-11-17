@@ -63,6 +63,8 @@ extern std::string quant_dir;
 extern std::unordered_set<std::string> excluded_seqs;
 extern int32_t n_threads;
 extern std::unique_ptr<GFastaDb> g_fasta;
+// --tso-filter (see is_tso_strand_invasion in predictions.cpp)
+extern std::unique_ptr<GFastaDb> g_tso_fasta;
 extern std::string guide_gff;
 extern std::string out_fname;
 extern std::string out_dir;
@@ -96,6 +98,7 @@ namespace ribbon {
                  "ribbon"};
 
     // Values that we check or combine before storing them in the settings.
+    std::string tso_fasta_path;
     std::string guide_path, out_path, label_str, fasta_path, exclude_str,
         cram_ref_path;
     bool no_trim = false;
@@ -188,6 +191,12 @@ namespace ribbon {
                    "sequence(s), comma-separated");
     app.add_option("-S,--rseq", fasta_path,
                    "reference genome sequence (FASTA)");
+    app.add_option("--tso-filter", tso_fasta_path,
+                   "with --sq3, the genome (FASTA) used to recognize TSO "
+                   "strand invasion: a UMI molecule with GGG in the 4 bases "
+                   "upstream of its 5' end does not count as a transcript "
+                   "start in the single-exon test (does not turn on the "
+                   "splice-motif checks of -S)");
     app.add_option("--ref,--cram-ref", cram_ref_path,
                    "reference genome FASTA file for CRAM input");
     auto version_callback = [](int32_t) {
@@ -234,6 +243,13 @@ namespace ribbon {
     }
     if (!fasta_path.empty())
       g_fasta = std::make_unique<GFastaDb>(fasta_path.c_str());
+    if (!tso_fasta_path.empty()) {
+      if (!smartseq3) {
+        fprintf(stderr, "Error: --tso-filter needs --sq3\n");
+        exit(1);
+      }
+      g_tso_fasta = std::make_unique<GFastaDb>(tso_fasta_path.c_str());
+    }
     if (!cram_ref_path.empty()) cram_ref = cram_ref_path.c_str();
     if (!exclude_str.empty()) {
       // Split by comma and populate excludeGSeqs

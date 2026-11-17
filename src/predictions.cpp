@@ -43,10 +43,12 @@ namespace ribbon {
   const float max_single_exon_background = 0.02;
   const int32_t single_exon_background_gap = 200;
   const int32_t single_exon_background_reach = 2000;
-  // With --sq3 it also needs min_single_exon_umi_starts UMI reads (read 1)
-  // that start within single_exon_start_window bp of its 5' end.
+  // With --sq3 it also needs min_single_exon_umi_starts UMI molecules whose
+  // read 1 starts within single_exon_start_window bp of its 5' end; with
+  // --tso-filter, molecules marked as TSO strand invasion do not count
+  // (ribbon_data/benchmark/umi/tss/README.md, lead 3).
   const float min_single_exon_umi_starts = 3;
-  const int32_t single_exon_start_window = 50;
+  const int32_t single_exon_start_window = 25;
 
   // With --sq3 a novel multi-exon prediction needs min_umi_start_molecules
   // UMI molecules whose read 1 starts within umi_start_window bp of its 5'
@@ -758,12 +760,36 @@ namespace ribbon {
     }
   }
 
+  // True if the genome right upstream of a UMI read's 5' end (with
+  // --tso-filter) shows TSO strand invasion: GGG within the 4 bases before it
+  // on the transcript's strand. The Smart-seq3 TSO ends in GGG; where it
+  // anneals inside a cDNA instead of at the RNA's 5' end, the genome there
+  // matches it (Tang et al. 2013; Hagemann-Jensen et al. 2022).
+  bool is_tso_strand_invasion(BundleData *bundle, char strand,
+                              int32_t five_prime) {
+    if (!bundle->tso_gseq) return false;
+    int32_t len = bundle->end - bundle->start + 1;
+    // The 4 bases upstream on the strand: before the 5' end on '+', after it
+    // on '-' (where GGG reads CCC on the forward strand)
+    int32_t first = strand == '+' ? five_prime - 4 : five_prime + 1;
+    int32_t from = first - bundle->start;
+    if (from < 0 || from + 4 > len) return false;
+    char g = strand == '+' ? 'G' : 'C';
+    for (int32_t i = from; i + 3 <= from + 4; i++)
+      if (bundle->tso_gseq[i] == g && bundle->tso_gseq[i + 1] == g
+          && bundle->tso_gseq[i + 2] == g)
+        return true;
+    return false;
+  }
+
   // The 5' ends of the bundle's UMI read 1s (--sq3), per strand. Weighted by
   // read count, or with by_molecule by molecule: each (cell, UMI) counts once
   // per 5' end, 1 / nh for a multi-mapped one. The strand is the one the UMI
-  // gave the read (umi_strand).
+  // gave the read (umi_strand). With skip_invasion, molecules marked as TSO
+  // strand invasion are left out (is_tso_strand_invasion).
   PerStrand<ReadStarts> collect_umi_starts(BundleData *bundle,
-                                           bool by_molecule) {
+                                           bool by_molecule,
+                                           bool skip_invasion = false) {
     PerStrand<ReadStarts> umi_starts;
     // (5' end, cell, UMI) -> weight, for by_molecule
     PerStrand<std::map<std::tuple<int32_t, int32_t, std::string>, float>>
@@ -773,6 +799,8 @@ namespace ribbon {
       char strand = read->umi_strand;
       if (strand != '+' && strand != '-') continue;
       int32_t five_prime = strand == '+' ? read->start : read->end;
+      if (skip_invasion && is_tso_strand_invasion(bundle, strand, five_prime))
+        continue;
       if (!by_molecule) {
         umi_starts[strand].by_position.push_back(
             {five_prime, read->read_count});
@@ -823,7 +851,8 @@ namespace ribbon {
 
   // Drops the novel single-exon predictions that do not look like transcripts
   // of their own: those that do not stand out from the coverage around them
-  // and, with --sq3, those with too few UMI reads starting at their 5' end.
+  // and, with --sq3, those with too few UMI molecules starting at their 5'
+  // end.
   // Reference ones are kept. On the real data most dropped ones are unspliced
   // pre-mRNA inside introns (ribbon_data/benchmark/README.md).
   void drop_unsupported_single_exons(BundleData *bundle) {
@@ -835,7 +864,7 @@ namespace ribbon {
 
     // With --sq3: the 5' ends of the UMI read 1s of each strand
     PerStrand<ReadStarts> umi_starts;
-    if (smartseq3) umi_starts = collect_umi_starts(bundle, false);
+    if (smartseq3) umi_starts = collect_umi_starts(bundle, true, true);
 
     for (auto& p : predictions) {
       if (!p->flag || p->t_eq || count_of(p->exons) != 1) continue;

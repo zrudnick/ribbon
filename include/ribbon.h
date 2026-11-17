@@ -805,6 +805,9 @@ namespace ribbon {
 
     std::string ref_seq; // reference sequence name
     char *gseq; // actual genomic sequence for the bundle
+    // With --tso-filter: the bundle's genomic sequence, upper case, for the
+    // strand-invasion check only (see is_tso_strand_invasion); NULL otherwise
+    char *tso_gseq;
     ReadList reads;
     // Per-bp coverage of each strand and of all reads (see BpCoverage)
     BpCoverage bp_coverage;
@@ -818,7 +821,7 @@ namespace ribbon {
     BundleData()
         : idx(0), start(0), end(0), num_reads(0),
           num_fragments(0), frag_len(0), sum_cov(0), ref_seq(),
-          gseq(NULL), reads(), junction(),
+          gseq(NULL), tso_gseq(NULL), reads(), junction(),
           predictions(), counts(), cell_name() {
       for (char strand : {'-', '.', '+'}) bp_coverage[strand].reserve(4096);
     }
@@ -946,6 +949,7 @@ namespace ribbon {
       cell_placed_bases.clear();
       counts.reset();
       GFREE(gseq);
+      GFREE(tso_gseq);
     }
 
     ~BundleData() {

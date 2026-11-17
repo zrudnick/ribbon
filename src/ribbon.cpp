@@ -128,6 +128,10 @@ std::unordered_set<std::string> excluded_seqs;
 
 int32_t n_threads = 1;
 std::unique_ptr<GFastaDb> g_fasta;
+// --tso-filter: the genome used only to recognize TSO strand invasion (see
+// is_tso_strand_invasion in predictions.cpp), apart from -S so that it does
+// not turn on the splice-motif checks
+std::unique_ptr<GFastaDb> g_tso_fasta;
 std::string guide_gff; // -G option
 std::string out_fname;
 std::string out_dir;
@@ -371,6 +375,18 @@ namespace ribbon {
             }
             bundle->gseq = fa_seq->copyRange(bundle->start, bundle->end, false,
                                             true);
+          }
+          // The same sequence for the strand-invasion check (--tso-filter)
+          if (g_tso_fasta) {
+            GFaSeqGet *fa_seq = g_tso_fasta->fetch(bundle->ref_seq.c_str());
+            if (fa_seq == NULL) {
+              fprintf(stderr,
+                      "Error: could not retrieve sequence data for %s!\n",
+                      bundle->ref_seq.c_str());
+              exit(1);
+            }
+            bundle->tso_gseq = fa_seq->copyRange(bundle->start, bundle->end,
+                                                 false, true);
           }
         } // have alignments to process
 
@@ -653,6 +669,7 @@ namespace ribbon {
     io->stop(); // close all BAM files
     io.reset();
     g_fasta.reset();
+    g_tso_fasta.reset();
 
     // Warn if none of the guides matched the sequences of the alignments.
     if (guided && no_ref_used) {
