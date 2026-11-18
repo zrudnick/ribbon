@@ -260,8 +260,10 @@ namespace ribbon {
 
   // Groups the alignments of all input files (read in genomic order) into
   // bundles, with their guides if guided, and queues each finished bundle for
-  // the workers. Exits on unsorted input; no_ref_used turns false with guides.
-  void process_reads(FileIO *io, std::vector<GRefData> &ref_guides,
+  // the workers. Returns false on an input error (unsorted input, missing
+  // genome sequence), after the workers stopped; no_ref_used turns false with
+  // guides.
+  bool process_reads(FileIO *io, std::vector<GRefData> &ref_guides,
                      BundleData *bundles, BundleData *bundle,
                      std::vector<BundleData *> *bundle_queue,
                      bool &no_ref_used) {
@@ -286,6 +288,9 @@ namespace ribbon {
     bool more_alignments = true;
     int32_t prev_pos = 0;
     bool skip_gseq = false;
+    // On an input error we stop reading like at the end of the input, but
+    // queue no more bundles (exit() here would hang on the waiting workers).
+    bool input_error = false;
     while (more_alignments) {
       bool chr_changed = false;
       int32_t pos = 0;
@@ -333,7 +338,8 @@ namespace ribbon {
           } else if (aln_counts[ref_id] > 0) {
             fprintf(stderr, "%s\nAlignments (%d) already found for %s !\n",
                     ERR_BAM_SORT, aln_counts[ref_id], ref_name);
-            exit(1);
+            input_error = true;
+            break;
           }
           prev_pos = 0;
         }
@@ -343,7 +349,8 @@ namespace ribbon {
                   "prev_pos=%d\n",
                   ERR_BAM_SORT, brec->name(), brec->start, pos, ref_name,
                   prev_pos);
-          exit(1);
+          input_error = true;
+          break;
         }
 
         // Count the alignment and decide whether it starts a new bundle.
@@ -359,6 +366,12 @@ namespace ribbon {
           new_cluster = true;
         }
       } else { // no more alignments
+        // The inputs could not be merged (FileIO::next)
+        if (!io->error.empty()) {
+          fprintf(stderr, "%s\n", io->error.c_str());
+          input_error = true;
+          break;
+        }
         more_alignments = false;
         new_cluster = true; // fake a new start (end of last bundle)
       }
@@ -375,7 +388,8 @@ namespace ribbon {
               fprintf(stderr,
                       "Error: could not retrieve sequence data for %s!\n",
                       bundle->ref_seq.c_str());
-              exit(1);
+              input_error = true;
+              break;
             }
             bundle->gseq = fa_seq->copyRange(bundle->start, bundle->end, false,
                                             true);
@@ -387,7 +401,8 @@ namespace ribbon {
               fprintf(stderr,
                       "Error: could not retrieve sequence data for %s!\n",
                       bundle->ref_seq.c_str());
-              exit(1);
+              input_error = true;
+              break;
             }
             bundle->tso_gseq = fa_seq->copyRange(bundle->start, bundle->end,
                                                  false, true);
@@ -472,6 +487,14 @@ namespace ribbon {
       aln_data.strand = strand;
       process_read_in(curr_start, curr_end, *bundle, hash_read, aln_data);
     } // for each read alignment
+
+    // After an input error: the bundle being loaded is dropped, and we let
+    // the workers finish the queued ones and stop.
+    if (input_error) {
+      wait_for_bundles();
+      return false;
+    }
+    return true;
   }
 
   // Closes and deletes the temporary results file and its directory, for the
@@ -654,8 +677,8 @@ namespace ribbon {
     }
 
     bool no_ref_used = true;
-    process_reads(io.get(), ref_guides, bundles, bundle, &bundle_queue,
-                  no_ref_used);
+    bool reads_ok = process_reads(io.get(), ref_guides, bundles, bundle,
+                                  &bundle_queue, no_ref_used);
 
     // Wait for the workers and free the threads and the bundles.
 #ifndef NOTHREADS
@@ -674,6 +697,12 @@ namespace ribbon {
     io.reset();
     g_fasta.reset();
     g_tso_fasta.reset();
+
+    // Stop after an input error (process_reads printed it), without output.
+    if (!reads_ok) {
+      remove_temp_output();
+      return 1;
+    }
 
     // Warn if none of the guides matched the sequences of the alignments.
     if (guided && no_ref_used) {

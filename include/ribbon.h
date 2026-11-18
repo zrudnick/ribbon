@@ -1174,43 +1174,58 @@ namespace ribbon {
 
 extern std::string cram_ref; // reference genome FASTA for CRAM input
 
-// Holds the next unread BAM record for one input file, so FileIO
-// can pick, across all input files, whichever record comes first in
-// genomic order.
+// Holds the next unread BAM record of one input file, so FileIO can pick,
+// across all input files, whichever record comes first in genomic order.
 struct InputRecord {
   std::unique_ptr<GSamRecord> brec; // owned here
   int32_t file_idx; // index of the source file in FileIO's files/readers
+  // The record's chromosome in FileIO's merge order (ref_order), so that
+  // files with different header orders compare by chromosome name
+  int32_t ref_rank;
+  // Heap order: false when this record comes first (lower chromosome rank,
+  // then lower start, end, file, name).
   bool operator<(const InputRecord& o) const {
-    // Decreasing location sort
+    if (ref_rank != o.ref_rank) return ref_rank > o.ref_rank;
     GSamRecord& r1 = *brec;
     GSamRecord& r2 = *(o.brec);
-    int32_t ref_cmp = r1.refId() - r2.refId();
-    if (ref_cmp == 0) {
-      // Higher coords first
-      if (r1.start != r2.start)
-        return (r1.start > r2.start);
-      else {
-        if (r1.end != r2.end)
-          return (r1.end > r2.end);
-        else if (file_idx == o.file_idx)
-          return (strcmp(r1.name(), r2.name()) > 0);
-        else
-          return file_idx > o.file_idx;
-      }
-    } else { // use header order
-      return (ref_cmp > 0);
-    }
+    if (r1.start != r2.start) return r1.start > r2.start;
+    if (r1.end != r2.end) return r1.end > r2.end;
+    if (file_idx != o.file_idx) return file_idx > o.file_idx;
+    return strcmp(r1.name(), r2.name()) > 0;
   }
 
-  InputRecord(GSamRecord *b = NULL, int32_t i = 0) : brec(b), file_idx(i) {}
+  InputRecord(GSamRecord *b, int32_t i, int32_t rank)
+      : brec(b), file_idx(i), ref_rank(rank) {}
 };
 
-// Merges one or more input files into a single stream of BAM records
-// ordered by genomic location (start() then repeated next() calls).
+// Merges one or more input files into a single stream of BAM records in
+// genomic order (start() then repeated next() calls; defined in
+// read_input.cpp). One file is read as it is. Several files are merged one
+// chromosome at a time through their indexes when all of them have one, so
+// each file's own chromosome order does not matter; otherwise they are merged
+// as streams, and each must be sorted in the chromosome order of its header.
 struct FileIO {
 protected:
   // Record returned by the last next() call
   std::unique_ptr<InputRecord> current_rec;
+  // Chromosome names in merge order: the first file's header order, then
+  // names only later files have
+  std::vector<std::string> ref_order;
+  // For each file: the merge rank of each of its header's tids, and the tid
+  // of each rank (-1: the file has no such chromosome)
+  std::vector<std::vector<int32_t>> rank_of_tid;
+  std::vector<std::vector<int32_t>> tid_of_rank;
+  // Several indexed files: merged one chromosome (rank) at a time
+  bool by_index = false;
+  int32_t next_rank = 0; // the next chromosome to load in by_index mode
+  // Streams: the rank of the last record read from each file (sort check)
+  std::vector<int32_t> last_rank;
+
+  int32_t rank_of(int32_t file_idx, GSamRecord *brec) const;
+  void push_pending(std::unique_ptr<InputRecord> rec);
+  void read_into_pending(int32_t file_idx);
+  void build_ref_order();
+  void load_next_chromosome();
 
 public:
   // One reader per input file; owned here
@@ -1219,72 +1234,14 @@ public:
   // Next unread record for each file, kept as a heap whose top is the record
   // that comes first in genomic order
   std::vector<std::unique_ptr<InputRecord>> pending_recs;
+  // Set when the inputs cannot be merged (next() then returns NULL)
+  std::string error;
   FileIO() : current_rec(), readers(), files(), pending_recs() {}
 
-  // Heap order of the pending records: the first in genomic order is on top.
-  static bool record_less(const std::unique_ptr<InputRecord>& a,
-                          const std::unique_ptr<InputRecord>& b) {
-    return *a < *b;
-  }
-
-  // Adds a record to the heap of pending records.
-  void push_pending(std::unique_ptr<InputRecord> rec) {
-    pending_recs.push_back(std::move(rec));
-    std::push_heap(pending_recs.begin(), pending_recs.end(), record_less);
-  }
-
-  // Registers an input file path (or "-" for stdin), after checking it exists.
-  void add(const char *fn) {
-    std::string sfn(fn);
-    // Must exist and not be a directory
-    bool is_stdin = sfn == "-";
-    if (!is_stdin
-        && (!std::filesystem::exists(fn) || std::filesystem::is_directory(fn))) {
-      fprintf(stderr, "Error: input file %s cannot be found!\n", fn);
-      exit(1);
-    }
-    files.push_back(sfn);
-  }
-
-  // Opens all registered input files and loads the first record from each.
-  void start() {
-    std::vector<std::string> bam_files = files;
-
-    // Open every input file and load the first record of each
-    for (int32_t i = 0; i < count_of(bam_files); ++i) {
-      readers.push_back(std::make_unique<GSamReader>(
-          bam_files[i].c_str(), cram_ref.empty() ? NULL : cram_ref.c_str()));
-      GSamRecord *brec = readers.back()->next();
-      if (brec)
-        push_pending(std::make_unique<InputRecord>(brec, i));
-    }
-  }
-
-  // Returns the next record across all input files in genomic order (a k-way
-  // merge over each file's next unread record), refilling from whichever file
-  // the returned record came from. Returns NULL once every file is exhausted.
-  GSamRecord *next() {
-    // Must free old current record first
-    current_rec.reset();
-    if (!pending_recs.empty()) {
-      // Lowest coordinate
-      std::pop_heap(pending_recs.begin(), pending_recs.end(), record_less);
-      current_rec = std::move(pending_recs.back());
-      pending_recs.pop_back();
-      GSamRecord *next_bam_rec = readers[current_rec->file_idx]->next();
-      if (next_bam_rec)
-        push_pending(std::make_unique<InputRecord>(next_bam_rec,
-                                                   current_rec->file_idx));
-      return current_rec->brec.get();
-    } else return NULL;
-  }
-
-  // Closes all input readers.
-  void stop() {
-    for (int32_t i = 0; i < count_of(readers); ++i) {
-      readers[i]->bclose();
-    }
-  }
+  void add(const char *fn);
+  void start();
+  GSamRecord *next();
+  void stop();
 };
 
 // The algorithmic components, split into their own files:

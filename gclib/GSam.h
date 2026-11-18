@@ -366,6 +366,11 @@ class GSamReader {
    char* fname;
    sam_hdr_t* hdr;
    bam1_t* b_next; //for light next(GBamRecord& b)
+   hts_idx_t* idx; //index of the file (.bai/.csi/.crai), if loadIndex() found one
+   hts_itr_t* itr; //with seekRef(): next() returns only the alignments of one reference
+   int readNext(bam1_t* b) {
+      return itr ? sam_itr_next(hts_file, itr, b) : sam_read1(hts_file, hdr, b);
+   }
  public:
    void bopen(const char* filename, const char* cram_refseq=NULL, int32_t cram_req_fields=0) {
 	      hts_file=hts_open(filename, "r");
@@ -389,7 +394,8 @@ class GSamReader {
    }
 
    GSamReader(const char* fn, const char* cram_ref=NULL,
-		   int32_t required_fields=0):hts_file(NULL),fname(NULL), hdr(NULL), b_next(NULL) {
+		   int32_t required_fields=0):hts_file(NULL),fname(NULL), hdr(NULL), b_next(NULL),
+		   idx(NULL), itr(NULL) {
       bopen(fn, cram_ref, required_fields);
    }
 
@@ -405,7 +411,25 @@ class GSamReader {
 	   return hdr->target_name[tid];
    }
 
+   //loads the index of the open file; false if it has none
+   bool loadIndex() {
+      if (hts_file==NULL) return false;
+      if (idx==NULL) idx=sam_index_load3(hts_file, fname, NULL, HTS_IDX_SILENT_FAIL);
+      return idx!=NULL;
+   }
+
+   //from now on next() returns the alignments on reference tid only, in
+   //coordinate order (needs loadIndex()); false if tid cannot be queried
+   bool seekRef(int tid) {
+      if (itr) { hts_itr_destroy(itr); itr=NULL; }
+      if (idx==NULL) return false;
+      itr=sam_itr_queryi(idx, tid, 0, HTS_POS_MAX);
+      return itr!=NULL;
+   }
+
    void bclose() {
+      if (itr) { hts_itr_destroy(itr); itr=NULL; }
+      if (idx) { hts_idx_destroy(idx); idx=NULL; }
       if (hts_file) {
    	    if (hdr!=NULL) sam_hdr_destroy(hdr);
    	    hdr=NULL;
@@ -490,7 +514,7 @@ class GSamReader {
       if (hts_file==NULL)
         GError("Warning: GSamReader::next() called with no open file.\n");
       bam1_t* b = bam_init1();
-      if (sam_read1(hts_file, hdr, b) >= 0) {
+      if (readNext(b) >= 0) {
         GSamRecord* bamrec=new GSamRecord(b, hdr, true);
         return bamrec;
       }
@@ -502,7 +526,7 @@ class GSamReader {
        if (hts_file==NULL)
 	        GError("Warning: GSamReader::next() called with no open file.\n");
 	   if (b_next==NULL) b_next=bam_init1();
-       if (sam_read1(hts_file, hdr, b_next) >= 0) {
+       if (readNext(b_next) >= 0) {
 	        rec.init(b_next, hdr, false);
 	        return true;
 	   }

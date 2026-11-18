@@ -448,3 +448,148 @@ namespace ribbon {
   }
 
 } // namespace ribbon
+
+//---- FileIO: merging the input files into one stream of records
+
+// Heap order of the pending records: the first in genomic order is on top.
+static bool comes_later(const std::unique_ptr<InputRecord>& a,
+                        const std::unique_ptr<InputRecord>& b) {
+  return *a < *b;
+}
+
+// The merge rank of a record's chromosome; records without one (unmapped,
+// at the end of a file) come last.
+int32_t FileIO::rank_of(int32_t file_idx, GSamRecord *brec) const {
+  int32_t tid = brec->refId();
+  if (tid < 0 || tid >= count_of(rank_of_tid[file_idx])) return INT32_MAX;
+  return rank_of_tid[file_idx][tid];
+}
+
+// Adds a record to the heap of pending records.
+void FileIO::push_pending(std::unique_ptr<InputRecord> rec) {
+  pending_recs.push_back(std::move(rec));
+  std::push_heap(pending_recs.begin(), pending_recs.end(), comes_later);
+}
+
+// Reads the next record of a file into the heap. Streams of several files
+// must not go back to an earlier chromosome: that would interleave the
+// files, so we stop with an error instead.
+void FileIO::read_into_pending(int32_t file_idx) {
+  GSamRecord *brec = readers[file_idx]->next();
+  if (brec == NULL) return;
+  int32_t rank = rank_of(file_idx, brec);
+
+  // Check the order of a stream (one file alone is read as it is).
+  if (!by_index && count_of(files) > 1) {
+    if (rank < last_rank[file_idx]) {
+      error = "Error: input file " + files[file_idx]
+              + " is not sorted in the chromosome order of its header ("
+              + brec->refName() + " comes after "
+              + (last_rank[file_idx] < count_of(ref_order)
+                     ? ref_order[last_rank[file_idx]] : "unplaced reads")
+              + ").\nWith several input files, index each of them "
+                "(samtools index) or sort them (samtools sort).";
+      delete brec;
+      return;
+    }
+    last_rank[file_idx] = rank;
+  }
+  push_pending(std::make_unique<InputRecord>(brec, file_idx, rank));
+}
+
+// Builds the merge order of the chromosomes (the first file's header order,
+// then names only later files have) and maps each file's tids to it.
+void FileIO::build_ref_order() {
+  std::unordered_map<std::string, int32_t> rank_of_name;
+  for (auto& reader : readers) {
+    sam_hdr_t *hdr = reader->header();
+    rank_of_tid.emplace_back(hdr->n_targets);
+    for (int32_t tid = 0; tid < hdr->n_targets; ++tid) {
+      std::string name = hdr->target_name[tid];
+      auto found = rank_of_name.emplace(name, count_of(ref_order));
+      if (found.second) ref_order.push_back(name);
+      rank_of_tid.back()[tid] = found.first->second;
+    }
+  }
+
+  // The inverse map, for loading one chromosome of each file.
+  for (auto& ranks : rank_of_tid) {
+    tid_of_rank.emplace_back(ref_order.size(), -1);
+    for (int32_t tid = 0; tid < count_of(ranks); ++tid)
+      tid_of_rank.back()[ranks[tid]] = tid;
+  }
+}
+
+// By index: once the pending records are used up, loads the first record of
+// each file on the next chromosome that has any.
+void FileIO::load_next_chromosome() {
+  while (pending_recs.empty() && next_rank < count_of(ref_order)) {
+    for (int32_t i = 0; i < count_of(readers); ++i) {
+      int32_t tid = tid_of_rank[i][next_rank];
+      if (tid >= 0 && readers[i]->seekRef(tid)) read_into_pending(i);
+    }
+    ++next_rank;
+  }
+}
+
+// Returns the next record across all input files in genomic order (a k-way
+// merge over each file's next unread record), refilling from whichever file
+// the returned record came from. Returns NULL once every file is exhausted,
+// or on an error (then error is set).
+GSamRecord *FileIO::next() {
+  // Must free old current record first
+  current_rec.reset();
+  if (!error.empty()) return NULL;
+  if (by_index) load_next_chromosome();
+  if (pending_recs.empty()) return NULL;
+
+  // Take the record that comes first and refill from its file.
+  std::pop_heap(pending_recs.begin(), pending_recs.end(), comes_later);
+  current_rec = std::move(pending_recs.back());
+  pending_recs.pop_back();
+  read_into_pending(current_rec->file_idx);
+  if (!error.empty()) {
+    current_rec.reset();
+    return NULL;
+  }
+  return current_rec->brec.get();
+}
+
+// Opens all registered input files, decides how to merge them and loads the
+// first records.
+void FileIO::start() {
+  for (const std::string& file : files) {
+    readers.push_back(std::make_unique<GSamReader>(
+        file.c_str(), cram_ref.empty() ? NULL : cram_ref.c_str()));
+  }
+  build_ref_order();
+
+  // Several files are merged by index when every one of them has an index.
+  by_index = count_of(files) > 1;
+  for (int32_t i = 0; by_index && i < count_of(files); ++i)
+    by_index = files[i] != "-" && readers[i]->loadIndex();
+
+  // Load the first record of each file (by index: of the first chromosome).
+  last_rank.assign(files.size(), 0);
+  if (by_index) load_next_chromosome();
+  else
+    for (int32_t i = 0; i < count_of(readers); ++i) read_into_pending(i);
+}
+
+// Closes all input readers.
+void FileIO::stop() {
+  for (auto& reader : readers) reader->bclose();
+}
+
+// Registers an input file path (or "-" for stdin), after checking it exists.
+void FileIO::add(const char *fn) {
+  std::string sfn(fn);
+  // Must exist and not be a directory
+  bool is_stdin = sfn == "-";
+  if (!is_stdin
+      && (!std::filesystem::exists(fn) || std::filesystem::is_directory(fn))) {
+    fprintf(stderr, "Error: input file %s cannot be found!\n", fn);
+    exit(1);
+  }
+  files.push_back(sfn);
+}
