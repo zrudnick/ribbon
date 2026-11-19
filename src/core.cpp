@@ -106,15 +106,16 @@ namespace ribbon {
           for (int32_t i = 0; i < count_of(trim_point); i++) {
             if (trim_point[i].pos) {
               if (trim_point[i].start) {
-                if (add_single_exon_prediction(bundle, gene_count, prediction_start,
-                                               trim_point[i].pos - CHI_WIN))
+                if (add_single_exon_prediction(
+                        bundle, gene_count, prediction_start,
+                        trim_point[i].pos - coverage_window_len))
                   made_prediction = true;
                 prediction_start = trim_point[i].pos;
               } else {
                 if (add_single_exon_prediction(bundle, gene_count, prediction_start,
                                                trim_point[i].pos))
                   made_prediction = true;
-                prediction_start = trim_point[i].pos + CHI_WIN;
+                prediction_start = trim_point[i].pos + coverage_window_len;
               }
             }
           }

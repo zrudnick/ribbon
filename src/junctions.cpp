@@ -468,16 +468,8 @@ namespace ribbon {
 
     // Flag a junction that only reads with many mismatches support.
     if (junction.nm
-        && round(junction.nm) == round(junction.effective_n_reads())) {
+        && round(junction.nm) == round(junction.effective_n_reads()))
       mismatch = true;
-      // Don't believe long intron if all junctions are from bad reads unless
-      // highly covered
-      if (junction.end - junction.start > long_intron
-          && junction.effective_n_reads() < CHI_WIN * ERROR_PERC) {
-        junction.strand = '.';
-        return false;
-      }
-    }
 
     // Reject a junction if the coverage next to it hardly changes and its
     // support is a small fraction of that coverage. We sum the coverage in a

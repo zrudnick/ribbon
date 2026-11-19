@@ -963,8 +963,15 @@ namespace ribbon {
 #define DROP 0.5
 #define ERROR_PERC 0.1
 
-#define CHI_WIN 100
-#define CHI_THR 50
+// Length (bp) of the coverage windows compared on each side of a position:
+// candidate trim points (coverage.cpp), coverage jumps at new starts and
+// ends (splice_graph.cpp), and the stretch left out next to a trim point
+// when a single exon is split (core.cpp). Was CHI_WIN.
+const int32_t coverage_window_len = 100;
+// Shortest piece the coverage trim scan cuts off: regions shorter than this
+// are not scanned, and trim points are at least this far from each other
+// and from the region ends (coverage.cpp). Was CHI_THR.
+const int32_t min_trim_segment_len = 50;
 #define SCELL_TOL 0.3 // scell tollerance for errors v17
 
 const double epsilon = 0.000001; //-E

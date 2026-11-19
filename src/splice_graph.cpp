@@ -46,8 +46,8 @@ namespace ribbon {
 
     if (new_start > graph_node->start) {
       uint32_t window_start = graph_node->start;
-      if (new_start - window_start > CHI_WIN) {
-        window_start = new_start - CHI_WIN;
+      if (new_start - window_start > coverage_window_len) {
+        window_start = new_start - coverage_window_len;
       }
 
       coverage_left = get_stranded_coverage(context.strand,
@@ -58,8 +58,8 @@ namespace ribbon {
     }
     if (new_start < new_end) {
       uint32_t window_end = new_end;
-      if (new_end - new_start >= CHI_WIN) {
-        window_end = new_start + CHI_WIN - 1;
+      if (new_end - new_start >= coverage_window_len) {
+        window_end = new_start + coverage_window_len - 1;
       }
 
       coverage_right = get_stranded_coverage(context.strand,
@@ -118,8 +118,8 @@ namespace ribbon {
 
     if (new_start >= graph_node->start) {
       uint32_t window_start = graph_node->start;
-      if (new_start - window_start >= CHI_WIN) {
-        window_start = new_start - CHI_WIN + 1;
+      if (new_start - window_start >= coverage_window_len) {
+        window_start = new_start - coverage_window_len + 1;
       }
 
       coverage_left = get_stranded_coverage(context.strand,
@@ -130,8 +130,8 @@ namespace ribbon {
     }
     if (new_start + 1 < new_end) {
       uint32_t window_end = new_end;
-      if (new_end - new_start > CHI_WIN) {
-        window_end = new_start + CHI_WIN;
+      if (new_end - new_start > coverage_window_len) {
+        window_end = new_start + coverage_window_len;
       }
 
       coverage_right = get_stranded_coverage(context.strand,

@@ -192,7 +192,7 @@ namespace ribbon {
         // (the first point, or a source point far enough after a sink point)
         bool starts_new_trim_point = !count_of(trim_point)
           || (!trim_point.back().start
-              && i + 1 - (int32_t)trim_point.back().pos > CHI_THR);
+              && i + 1 - (int32_t)trim_point.back().pos > min_trim_segment_len);
 
         if (starts_new_trim_point) {
           CTrimPoint t(i + 1,
@@ -218,7 +218,7 @@ namespace ribbon {
         // (the first point, or a sink point far enough after a source point)
         bool starts_new_trim_point = !count_of(trim_point)
           || (trim_point.back().start
-              && i - (int32_t)trim_point.back().pos > CHI_THR);
+              && i - (int32_t)trim_point.back().pos > min_trim_segment_len);
         if (starts_new_trim_point) {
           CTrimPoint t(i, (coverage_left - coverage_right) / abundance_divisor,
             false);
@@ -248,12 +248,12 @@ namespace ribbon {
     // Very short exon -> do not check. The scan below skips long_intron_anchor
     // bp at each end, so an exon this short has no positions to check anyway
     // (it gives the same output with or without this return).
-    if (region_len < CHI_THR) return;
+    if (region_len < min_trim_segment_len) return;
 
     double local_drop = ERROR_PERC / DROP;
-    if (region_len < 2 * (CHI_WIN + CHI_THR) + 1) {
+    if (region_len < 2 * (coverage_window_len + min_trim_segment_len) + 1) {
       // Check very tightly, and only accept one trim
-      if (region_len < CHI_WIN) {
+      if (region_len < coverage_window_len) {
         local_drop = ERROR_PERC / (10 * DROP); // very sharp drop
       }
       double last_drop = local_drop;
@@ -278,10 +278,11 @@ namespace ribbon {
 
     // Longer exon: scan the beginning, the middle and the end with their own
     // windows.
-    int32_t window_len = CHI_WIN + CHI_THR;
+    int32_t window_len = coverage_window_len + min_trim_segment_len;
     double last_drop = local_drop;
 
-    for (uint32_t i = start + CHI_THR - 1; i < start + window_len - 1; i++) {
+    for (uint32_t i = start + min_trim_segment_len - 1;
+         i < start + window_len - 1; i++) {
       double coverage_left = get_stranded_coverage(strand,
           start - ref_start, i - ref_start, bp_coverage) / (i - start);
       double coverage_right = get_stranded_coverage(strand,
@@ -314,7 +315,7 @@ namespace ribbon {
 
     local_drop = ERROR_PERC;
 
-    for (uint32_t i = region_len; i < end - CHI_THR - 1; i++) {
+    for (uint32_t i = region_len; i < end - min_trim_segment_len - 1; i++) {
       double coverage_left = get_stranded_coverage(strand,
           i - window_len + 1 - ref_start, i - ref_start,
           bp_coverage) / window_len;
@@ -327,8 +328,9 @@ namespace ribbon {
                                   last_drop);
     }
 
-    // Re-check each candidate against its neighbors (up to 3 * CHI_WIN away)
-    // and discard the ones that do not hold up.
+    // Re-check each candidate against its neighbors (up to max_reach away) and
+    // discard the ones that do not hold up.
+    const uint32_t max_reach = 3 * coverage_window_len;
     local_drop = ERROR_PERC / DROP;
     // We might adjust local_drop again here
     uint32_t last_start = start;
@@ -336,8 +338,7 @@ namespace ribbon {
       uint32_t mid_pos = trim_point[i].pos;
       if (trim_point[i].start) mid_pos--;
       // Do not consider a two big of a window
-      if (mid_pos - last_start > 3 * CHI_WIN) { last_start = mid_pos - 3
-                                               * CHI_WIN; }
+      if (mid_pos - last_start > max_reach) last_start = mid_pos - max_reach;
       // We add 1 bp coverage to all so we can avoid 0 coverages
       double coverage_left = get_stranded_coverage(strand,
           last_start - ref_start, mid_pos - ref_start,
@@ -345,7 +346,7 @@ namespace ribbon {
       uint32_t end_pos = end;
       if (i < count_of(trim_point) - 1) end_pos = trim_point[i + 1].pos;
       // Do not consider a two big of a window
-      if (end_pos - mid_pos > 3 * CHI_WIN) { end_pos = mid_pos + 3 * CHI_WIN; }
+      if (end_pos - mid_pos > max_reach) end_pos = mid_pos + max_reach;
       double coverage_right = get_stranded_coverage(strand,
           mid_pos + 1 - ref_start, end_pos - ref_start,
           bp_coverage) / (end_pos - mid_pos);
@@ -376,8 +377,8 @@ namespace ribbon {
               j--;
             }
             // Do not consider a two big of a window
-            if (mid_pos - left_start > 3 * CHI_WIN) { left_start = mid_pos - 3
-                * CHI_WIN; }
+            if (mid_pos - left_start > max_reach)
+              left_start = mid_pos - max_reach;
             // We add 1 bp coverage to all so we can avoid 0 coverages
             coverage_left = get_stranded_coverage(strand,
                                                   left_start - ref_start,
@@ -385,8 +386,7 @@ namespace ribbon {
                                                   bp_coverage)
                                                   / (mid_pos - left_start + 1);
             // Do not consider a two big of a window
-            if (end_pos - mid_pos > 3 * CHI_WIN) { end_pos = mid_pos + 3
-                                                  * CHI_WIN; }
+            if (end_pos - mid_pos > max_reach) end_pos = mid_pos + max_reach;
             coverage_right = get_stranded_coverage(strand,
                 mid_pos + 1 - ref_start, end_pos - ref_start,
                 bp_coverage) / (end_pos - mid_pos);

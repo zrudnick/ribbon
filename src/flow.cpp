@@ -29,14 +29,6 @@ extern float min_read_coverage;
 
 namespace ribbon {
 
-  // Logistic function l_min + (l_max - l_min) / (1 + exp(-k * (x - x0))), used to
-  // turn a log-coverage into a relative threshold (defaults: f(10) ~ 0.065,
-  // f(50) ~ 0.159, f(100) ~ 0.26, approaching l_max = 0.3).
-  float f_logistic(float x, float k = 0.03347, float x0 = 43.60,
-                   float l_min = 0.05, float l_max = 0.3) {
-    return l_min + (l_max - l_min) / (1.0 + (float)exp(-k * (x - x0)));
-  }
-
   // The node next to node in transfrag tf (step 1: toward the sink, -1: toward
   // the source) if tf has the edge between them, else -1.
   int32_t next_node_in_transfrag(const FlowContext& context,
@@ -330,40 +322,6 @@ namespace ribbon {
     }
   }
 
-  // Clears (in cell_low_cov_flags) the low-coverage flags of the touching nodes
-  // next to node i, on the left or on the right, when that neighbor has enough
-  // coverage next to the coverage of i: its signal is then real for this cell.
-  void rescue_low_coverage_neighbors(const FlowContext& context, 
-                                     int32_t i,
-                                     float node_coverage,
-                                     float neighbor_coverage,
-                                     float rescue_threshold, bool leftwards,
-                                     const BitVec& low_cov_flags,
-                                     BitVec& cell_low_cov_flags) {
-    bool rescue = node_coverage > CHI_WIN
-        && neighbor_coverage > rescue_threshold * node_coverage;
-
-    // True if node j is flagged and touches the node on its right (leftwards)
-    // or on its left (rightwards).
-    auto continues_flagged_run = [&](int32_t j) {
-      if (leftwards)
-        return j > 0 && low_cov_flags[j]
-               && context.graph.nodes[j]->end
-                   == context.graph.nodes[j + 1]->start;
-      return j < context.graph.node_count - 1 && low_cov_flags[j]
-             && context.graph.nodes[j]->start
-                 == context.graph.nodes[j - 1]->end + 1;
-    };
-
-    int32_t j = leftwards ? i - 1 : i + 1;
-    if (low_cov_flags[j] && rescue) {
-      while (continues_flagged_run(j)) {
-        cell_low_cov_flags[j] = 0;
-        j += leftwards ? -1 : 1;
-      }
-    }
-  }
-
   // The fraction of the pooled abundance of a transfrag from the source (or to
   // the sink) that this cell gets: the cell's share of the pooled coverage of
   // the node next to the source (or sink). Without reads there, the cell gets
@@ -389,15 +347,13 @@ namespace ribbon {
     return share;
   }
 
-  // Computes this cell's coverage of each node (node_coverage), rescues weak
-  // nodes next to well covered ones (cell_low_cov_flags), and makes the
+  // Computes this cell's coverage of each node (node_coverage), and makes the
   // transfrags of the source and sink carry their full abundance in this cell.
   // Returns the node to start extracting from: the one with the most
   // transfrag abundance passing through it, else the one with the most
   // coverage.
   int32_t compute_cell_node_coverages(const FlowContext& context,
                                       const BitVec& low_cov_flags,
-                                      BitVec& cell_low_cov_flags,
                                       std::vector<float>& node_coverage) {
     int32_t seed_node = 0; // node with maximum coverage
     // Node with maximum transcripts going through it
@@ -416,31 +372,7 @@ namespace ribbon {
           node_coverage[i]
               = current_node->cell_cov[context.cell] / current_node->len();
 
-          // Check if we can rescue some of the points
-          // not a lowcov point -> check previous points ; What about the cases
-          // where i is not covered but nearby nodes are quite high in
-          // expression
           if (!low_cov_flags[i]) {
-            // The threshold is 0.2 at coverage 100, 0.1 at 1000, 0.02 at
-            // 10,000 and approaches 0.01 after that.
-            float rescue_threshold = f_logistic(log10(node_coverage[i]),
-                                                -2.7212954278522243,
-                                                2.9063342233922893, 0.01,
-                                                0.21612903225806462);
-
-            rescue_low_coverage_neighbors(context, i, node_coverage[i],
-                node_coverage[i - 1], rescue_threshold, true, low_cov_flags,
-                cell_low_cov_flags);
-            // The next node can be the sink, which has no length
-            CGraphnode *next_node = context.graph.nodes[i + 1].get();
-            float next_coverage = next_node->len()
-                ? next_node->cell_cov[context.cell] / next_node->len() : 0;
-            rescue_low_coverage_neighbors(context, i, node_coverage[i],
-                next_coverage, rescue_threshold, false, low_cov_flags,
-                cell_low_cov_flags);
-          }
-
-          if (!cell_low_cov_flags[i]) {
             if (node_coverage[i] > node_coverage[seed_node]) seed_node = i;
             float through_abundance = 0;
             int32_t transfrag_count = count_of(current_node->transfrag_ids);
@@ -799,8 +731,8 @@ namespace ribbon {
     // Low-coverage flags of this cell: a copy that we clear for rescued nodes.
     BitVec cell_low_cov_flags(low_cov_flags);
 
-    int32_t seed_node = compute_cell_node_coverages(context, low_cov_flags,
-        cell_low_cov_flags, node_coverage);
+    int32_t seed_node = compute_cell_node_coverages(context, low_cov_flags, 
+      node_coverage);
     rescue_junctions_with_cell_support(context, cell_low_cov_flags);
 
     std::vector<std::vector<int32_t>> cell_transfrags
