@@ -7,6 +7,7 @@
 #include <tuple>
 #include <unordered_set>
 #include <vector>
+#include <cmath>
 #include "ribbon.h"
 #include "coverage.h"
 
@@ -36,13 +37,20 @@ namespace ribbon {
   // they get a lower floor (see drop_weak_predictions).
   const float min_reference_coverage = 1;
 
-  // A novel single-exon prediction must stand out from the coverage around
-  // it: the mean coverage from single_exon_background_gap to
-  // single_exon_background_reach bp beyond its ends may be at most
-  // max_single_exon_background times its own. Most single exons that fail
+  // A novel single-exon prediction must stand out from its surroundings: more
+  // cells must have a read starting inside it than read starts at
+  // single_exon_min_fold times the density from single_exon_background_gap to
+  // single_exon_background_reach bp beyond its ends explain, at a p-value
+  // below single_exon_alpha (a Poisson-binomial test over the cells, see
+  // single_exon_stands_out). The fold is an effect size: with many cells the
+  // test alone keeps intronic hotspots that are only a few times denser than
+  // the intron (ribbon_data/benchmark/small_n/se_effect/README.md); 50 is the
+  // enrichment the earlier ratio rule asked for. The gap keeps most fragments
+  // of the exon itself out of the background. Most single exons that fail
   // this are unspliced pre-mRNA inside introns (see
   // drop_unsupported_single_exons).
-  const float max_single_exon_background = 0.02;
+  const double single_exon_alpha = 0.001;
+  const double single_exon_min_fold = 50;
   const int32_t single_exon_background_gap = 200;
   const int32_t single_exon_background_reach = 2000;
   // With --sq3 it also needs min_single_exon_umi_starts UMI molecules whose
@@ -77,6 +85,45 @@ namespace ribbon {
            && it->first <= position + window; ++it)
         total += it->second;
       return total;
+    }
+  };
+
+  // The start positions of all reads of a bundle, sorted, with their cell and
+  // weight (read_count: with --sq3 the reads of a UMI molecule weigh 1 in
+  // total), and each cell's total weight in the bundle (its depth).
+  struct CellReadStarts {
+    struct Start {
+      int32_t position;
+      int32_t cell;
+      float weight;
+      bool operator<(const Start& o) const { return position < o.position; }
+    };
+    std::vector<Start> by_position;
+    std::vector<double> cell_depth; // per cell
+    double total_depth = 0; // all cells
+
+    // Total weight of the starts in [lo, hi].
+    double weight_in(int32_t lo, int32_t hi) const {
+      auto it = std::lower_bound(by_position.begin(), by_position.end(),
+                                 Start{lo, 0, 0});
+      double total = 0;
+      for (; it != by_position.end() && it->position <= hi; ++it)
+        total += it->weight;
+      return total;
+    }
+
+    // Number of cells with at least one start in [lo, hi].
+    int32_t cells_in(int32_t lo, int32_t hi) const {
+      std::vector<bool> seen(cell_depth.size(), false);
+      int32_t cells = 0;
+      auto it = std::lower_bound(by_position.begin(), by_position.end(),
+                                 Start{lo, 0, 0});
+      for (; it != by_position.end() && it->position <= hi; ++it)
+        if (!seen[it->cell]) {
+          seen[it->cell] = true;
+          cells++;
+        }
+      return cells;
     }
   };
 
@@ -419,11 +466,11 @@ namespace ribbon {
   void filter_overlapping_predictions(PredictionList& predictions,
                                       const std::vector<CoverageRank>& coverage_order,
                                       int32_t cell_count) {
-    for (int32_t i = 0; i < count_of(coverage_order) - 1; i++)
+    for (int32_t i = 0; i < count_of(coverage_order) - 1; i++) {
       // If predictions[n1] was not eliminated before
       if (predictions[coverage_order[i].p]->flag) {
         int32_t n1 = coverage_order[i].p;
-        for (int32_t j = i + 1; j < count_of(coverage_order); j++)
+        for (int32_t j = i + 1; j < count_of(coverage_order); j++) {
           if (predictions[coverage_order[j].p]->flag) {
             // Always predord.cov(n1)>=predord.cov(n2)
             int32_t n2 = coverage_order[j].p;
@@ -543,13 +590,9 @@ namespace ribbon {
               }
             }
           }
-        if (predictions[n1]->flag && count_of(predictions[n1]->exons) == 1) { // v22
-          // A single-exon prediction survives only if it is seen in enough
-          // cells (SCELL_NO) and well covered in at least one
-          if (predictions[n1]->gene_no < SCELL_NO || coverage_order[i].max_cov < 1.3)
-            predictions[n1]->flag = false;
         }
       }
+    }
   }
 
   // Drops the predictions covered below min_read_coverage (novel ones) or
@@ -827,37 +870,80 @@ namespace ribbon {
     return umi_starts;
   }
 
-  // Coverage (all reads, per bp summed) of the genomic region [start, end],
-  // clipped to the bundle: outside the bundle there are no reads.
-  double bundle_region_coverage(BundleData *bundle, int64_t start,
-                                int64_t end) {
-    int64_t lo = std::max<int64_t>(start, bundle->start);
-    int64_t hi = std::min<int64_t>(end, bundle->end);
-    if (hi < lo) return 0;
-    return get_region_coverage('.', (uint32_t)(lo - bundle->start),
-                               (uint32_t)(hi - bundle->start),
-                               bundle->bp_coverage);
+  // Collects the read starts of the bundle with their cells and weights, and
+  // each cell's depth (see CellReadStarts).
+  CellReadStarts collect_cell_read_starts(BundleData *bundle,
+                                          int32_t cell_count) {
+    CellReadStarts starts;
+    starts.cell_depth.assign(cell_count, 0);
+    for (const auto& read : bundle->reads) {
+      if (read->read_count <= 0 || read->bc < 0 || read->bc >= cell_count)
+        continue;
+      starts.by_position.push_back(
+          {(int32_t)read->start, read->bc, read->read_count});
+      starts.cell_depth[read->bc] += read->read_count;
+      starts.total_depth += read->read_count;
+    }
+    std::sort(starts.by_position.begin(), starts.by_position.end());
+    return starts;
   }
 
-  // True if the single-exon prediction p does not stand out from the
-  // coverage around it (max_single_exon_background).
-  bool is_single_exon_in_background(BundleData *bundle, const CPrediction& p) {
-    int64_t start = p.exons[0].start, end = p.exons[0].end;
-    double inside = bundle_region_coverage(bundle, start, end)
-        / (end - start + 1);
-    if (inside <= 0) return true;
+  // P(K >= k), where K is the number of successes in independent trials with
+  // the given success probabilities (a Poisson-binomial distribution),
+  // computed exactly by dynamic programming over the trials.
+  double poisson_binomial_tail(const std::vector<double>& probabilities,
+                               int32_t k) {
+    if (k <= 0) return 1;
 
-    // The two windows beyond the ends, the same length on each side
-    int64_t gap = single_exon_background_gap;
-    int64_t reach = single_exon_background_reach;
-    double around = bundle_region_coverage(bundle, start - reach, start - gap)
-        + bundle_region_coverage(bundle, end + gap, end + reach);
-    double background = around / (2 * (reach - gap + 1));
-    return background > max_single_exon_background * inside;
+    // dist[j]: probability of exactly j successes so far (j < k); dist[k]:
+    // of k or more, which stays k or more
+    std::vector<double> dist(k + 1, 0.0);
+    dist[0] = 1;
+    for (double p : probabilities) {
+      if (p <= 0) continue; // cannot succeed, changes nothing
+      // From the top down, so each value is updated from the previous trial
+      dist[k] += dist[k - 1] * p;
+      for (int32_t j = k - 1; j > 0; j--)
+        dist[j] = dist[j] * (1 - p) + dist[j - 1] * p;
+      dist[0] *= 1 - p;
+    }
+    return dist[k];
+  }
+
+  // True if more cells have a read starting inside the single-exon prediction
+  // p than its surroundings explain (p-value below single_exon_alpha). Under
+  // the null, reads start inside at single_exon_min_fold times the density of
+  // the two background windows beyond its ends, shared over the cells by their
+  // depth in the bundle.
+  bool single_exon_stands_out(const CellReadStarts& starts,
+                              const CPrediction& p) {
+    int32_t start = p.exons[0].start, end = p.exons[0].end;
+    int32_t cells_inside = starts.cells_in(start, end);
+    if (cells_inside == 0 || starts.total_depth <= 0) return false;
+
+    // Density of read starts per bp in the two windows beyond the ends (no
+    // reads outside the bundle)
+    int32_t gap = single_exon_background_gap;
+    int32_t reach = single_exon_background_reach;
+    double around = starts.weight_in(start - reach, start - gap)
+        + starts.weight_in(end + gap, end + reach);
+    double density = around / (2 * (reach - gap + 1));
+
+    // Each cell's chance of a read starting inside under the null: Poisson
+    // with mean fold x density x length x the cell's share of the bundle's
+    // reads
+    double length = end - start + 1;
+    double null_density = single_exon_min_fold * density;
+    std::vector<double> chance;
+    chance.reserve(starts.cell_depth.size());
+    for (double depth : starts.cell_depth)
+      chance.push_back(
+          1 - std::exp(-null_density * length * depth / starts.total_depth));
+    return poisson_binomial_tail(chance, cells_inside) < single_exon_alpha;
   }
 
   // Drops the novel single-exon predictions that do not look like transcripts
-  // of their own: those that do not stand out from the coverage around them
+  // of their own: those seen in no more cells than the reads around them explain
   // and, with --sq3, those with too few UMI molecules starting at their 5'
   // end.
   // Reference ones are kept. On the real data most dropped ones are unspliced
@@ -873,9 +959,13 @@ namespace ribbon {
     PerStrand<ReadStarts> umi_starts;
     if (smartseq3) umi_starts = collect_umi_starts(bundle, true, true);
 
+    // The read starts of every cell, for the background test
+    CellReadStarts starts
+        = collect_cell_read_starts(bundle, count_of(bundle->cell_name));
+
     for (auto& p : predictions) {
       if (!p->flag || p->t_eq || count_of(p->exons) != 1) continue;
-      if (is_single_exon_in_background(bundle, *p)) {
+      if (!single_exon_stands_out(starts, *p)) {
         p->flag = false;
         continue;
       }

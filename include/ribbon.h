@@ -967,8 +967,6 @@ namespace ribbon {
 #define CHI_THR 50
 #define SCELL_COV 20
 #define SCELL_TOL 0.3 // scell tollerance for errors v17
-// Number of single cells to accept as evidence for single exons
-#define SCELL_NO 50
 
 const double epsilon = 0.000001; //-E
 const float min_transfrag_abundance = 1.0; // transfrag path_bits threshold
