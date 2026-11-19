@@ -225,15 +225,19 @@ namespace ribbon {
             float raw_scale = has_raw && reads[n]->pair_count[j] > 0
                 ? reads[n]->pair_count_raw[j] / reads[n]->pair_count[j] : 1;
             assign_fragment_to_transfrags(bundle, state, tables, n, np,
-                                          reads[n]->pair_count[j], raw_scale);
+                                          reads[n]->pair_count[j], raw_scale,
+                                          1);
           }
         }
       }
       if (single_count > epsilon) {
         float raw_scale = has_raw ? std::max(1.0f, single_raw / single_count)
                                   : 1;
+        // A mate without its other mate here (another bundle) is half of a
+        // fragment for --quant: the two halves of a split pair make one
+        float fragment_share = reads[n]->has_mapped_mate ? 0.5 : 1;
         assign_fragment_to_transfrags(bundle, state, tables, n, -1,
-                                      single_count, raw_scale);
+                                      single_count, raw_scale, fragment_share);
       }
     }
   }

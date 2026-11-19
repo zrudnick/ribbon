@@ -48,7 +48,8 @@ namespace ribbon {
   void assign_fragment_to_transfrags(BundleData *bundle,
                                      AssemblyState& state, GraphTables& tables,
                                      int32_t read_idx, int32_t mate_idx,
-                                     float read_coverage, float raw_scale);
+                                     float read_coverage, float raw_scale,
+                                     float fragment_share);
 
   TransfragIndex build_transfrag_index(SpliceGraph& graph);
 } // namespace ribbon

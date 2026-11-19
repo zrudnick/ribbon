@@ -188,7 +188,7 @@ namespace ribbon {
                    "transcript; reference ones need 1 (default: 3)");
     app.add_option("-s", min_single_exon_coverage,
                    "minimum reads per bp coverage to consider for "
-                   "single-exon transcript (default: 4.75)");
+                   "single-exon transcript (default: 5)");
     app.add_option("-g", min_bundle_distance,
                    "maximum gap allowed between read mappings (default: 50)");
     app.add_option("-M", multi_read_frac,

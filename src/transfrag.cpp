@@ -641,7 +641,7 @@ namespace ribbon {
     uint32_t gap_end;
     int32_t cell_count;
     int32_t cell;
-    // The bases the fragment adds to the nodes (see cell_placed_bases)
+    // The bases the fragment adds to the nodes (see cell_fragment_bases)
     double *placed_bases;
   };
 
@@ -815,13 +815,35 @@ namespace ribbon {
     nodes.erase(nodes.begin(), nodes.begin() + flush_start);
   }
 
+  // The aligned bases of a fragment: the aligned blocks of its read and its
+  // mate (if they are still in use), with the bases where they overlap counted
+  // once.
+  double aligned_fragment_bases(const ReadList& reads, int32_t read_idx,
+                                int32_t mate_idx) {
+    bool use_read = reads[read_idx]->nh;
+    bool use_mate = mate_idx > -1 && reads[mate_idx]->nh;
+    double bases = (use_read ? reads[read_idx]->len : 0)
+                   + (use_mate ? reads[mate_idx]->len : 0);
+    if (!use_read || !use_mate) return bases;
+    for (const GSeg& a : reads[read_idx]->segs)
+      for (const GSeg& b : reads[mate_idx]->segs) {
+        int64_t lo = std::max(a.start, b.start);
+        int64_t hi = std::min(a.end, b.end);
+        if (hi >= lo) bases -= hi - lo + 1;
+      }
+    return bases;
+  }
+
   // Turns a read, or a pair seen as a fragment, into transfrag abundance: finds
   // its strand(s), the nodes and edges it touches in each graph (read and mate
   // path_bits) and adds them as one transfrag if compatible, else separately.
+  // fragment_share: how much of a fragment it is for the counts of --quant
+  // (0.5 for a mate whose other mate is not in the bundle).
   void assign_fragment_to_transfrags(BundleData *bundle,
                                      AssemblyState& state, GraphTables& tables,
                                      int32_t read_idx, int32_t mate_idx,
-                                     float read_coverage, float raw_scale) {
+                                     float read_coverage, float raw_scale,
+                                     float fragment_share) {
     // The bundle's reads and groups, and the graphs they go into
     ReadList& reads = bundle->reads;
     int32_t cell_count = count_of(bundle->cell_name);
@@ -842,11 +864,13 @@ namespace ribbon {
     PerStrand<float> strand_prop;
     compute_strand_prop(reads, state, read_idx, mate_idx, strand_prop);
 
-    // The fragment's cell counts the fragment and the bases it adds to the
-    // nodes, for the read counts of --quant (a fragment that reaches no node
-    // is not counted)
+    // The fragment's cell counts the fragment and its aligned bases, for the
+    // read counts of --quant (a fragment that reaches no node is not counted).
+    // Aligned, not placed: a fragment only partly on the nodes would make the
+    // bases per fragment too small and every count too large.
     int32_t cell = reads[read_idx]->bc;
     double placed_bases = 0;
+    double fragment_bases = aligned_fragment_bases(reads, read_idx, mate_idx);
 
     // For each strand that gets a share of the fragment, get the nodes that the
     // read and its mate touch in each graph.
@@ -952,10 +976,12 @@ namespace ribbon {
         if (placed_bases > 0 && cell >= 0) {
           if (cell >= count_of(bundle->cell_placed_fragments)) {
             bundle->cell_placed_fragments.resize(cell + 1, 0.0);
-            bundle->cell_placed_bases.resize(cell + 1, 0.0);
+            bundle->cell_fragment_bases.resize(cell + 1, 0.0);
           }
-          bundle->cell_placed_fragments[cell] += placement.abundance;
-          bundle->cell_placed_bases[cell] += placed_bases;
+          bundle->cell_placed_fragments[cell]
+              += placement.abundance * fragment_share;
+          bundle->cell_fragment_bases[cell]
+              += placement.abundance * fragment_bases;
           placed_bases = 0;
         }
       }

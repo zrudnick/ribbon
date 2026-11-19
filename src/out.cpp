@@ -32,9 +32,9 @@ extern std::string demultiplexed_dir;
 // With --quant: one read count table per cell in this directory
 extern std::string quant_dir;
 extern double total_placed_fragments;
-extern double total_placed_bases;
+extern double total_fragment_bases;
 extern std::map<std::string, double> placed_fragments_by_cell;
-extern std::map<std::string, double> placed_bases_by_cell;
+extern std::map<std::string, double> fragment_bases_by_cell;
 
 namespace ribbon {
 
@@ -246,8 +246,8 @@ namespace ribbon {
     // Adds a transcript from its first line (with the pooled TPM that
     // write_final_output computed) to the pooled table and to the table of
     // each of its cells. Reads = coverage x length / bases per fragment: the
-    // bases that the transcript took from the nodes, over the bases that a
-    // placed fragment adds to them on average (cell_placed_bases).
+    // bases that the transcript took from the nodes, over the cell's mean
+    // aligned bases per placed fragment (cell_fragment_bases).
     void add_transcript(const std::string& line, int32_t len,
                         double pooled_cov, double pooled_tpm) {
       Row row;
@@ -261,9 +261,9 @@ namespace ribbon {
       Row pooled_row = row;
       pooled_row.cov = pooled_cov;
       pooled_row.tpm = pooled_tpm;
-      if (total_placed_bases > 0.001)
+      if (total_fragment_bases > 0.001)
         pooled_row.num_reads = pooled_cov * len * total_placed_fragments
-            / total_placed_bases;
+            / total_fragment_bases;
       pooled_row.molecules = molecules.empty() ? 0 : atof(molecules.c_str());
       add(pooled, pooled_row);
 
@@ -273,9 +273,9 @@ namespace ribbon {
         cell_row.cov = cell.cov;
         cell_row.tpm = cell.tpm;
         cell_row.molecules = cell.molecules;
-        auto bases = placed_bases_by_cell.find(cell.cell);
+        auto bases = fragment_bases_by_cell.find(cell.cell);
         auto fragments = placed_fragments_by_cell.find(cell.cell);
-        if (bases != placed_bases_by_cell.end() && bases->second > 0.001
+        if (bases != fragment_bases_by_cell.end() && bases->second > 0.001
             && fragments != placed_fragments_by_cell.end())
           cell_row.num_reads = cell.cov * len * fragments->second
               / bases->second;

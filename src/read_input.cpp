@@ -379,6 +379,8 @@ namespace ribbon {
       std::unique_ptr<CReadAln> new_read = std::make_unique<CReadAln>(
           strand, nh, cell_id, umi, brec.start, brec.end);
       new_read->is_read1 = (brec.flags() & BAM_FREAD1) != 0;
+      new_read->has_mapped_mate = brec.isPaired()
+          && (brec.flags() & BAM_FMUNMAP) == 0;
       if (smartseq3 && umi && strlen(umi)) new_read->umi_strand = strand;
       read = new_read.get();
 

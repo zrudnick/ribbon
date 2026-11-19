@@ -80,7 +80,7 @@ uint32_t splice_site_error = 25;
 float min_read_coverage = 3;
 // Minimum per-base read coverage a single-exon transcript needs to be trusted
 // as real rather than noise
-float min_single_exon_coverage = 4.75;
+float min_single_exon_coverage = 5;
 // Reads at what distance should be considered part of separate bundles
 uint32_t min_bundle_distance = 50;
 // Distance threshold to detect polymerase run-off artifacts
@@ -107,13 +107,13 @@ double total_cov_sum = 0;
 // the per-cell FPKM and TPM
 std::map<std::string, double> frag_len_by_cell;
 std::map<std::string, double> cov_sum_by_cell;
-// The fragments placed into transfrags and the bases they added to the nodes,
-// in all and for each cell barcode: bases per fragment for the read counts of
-// --quant (see cell_placed_fragments)
+// The fragments placed into transfrags and their aligned bases, in all and for
+// each cell barcode: bases per fragment for the read counts of --quant (see
+// cell_placed_fragments)
 double total_placed_fragments = 0;
-double total_placed_bases = 0;
+double total_fragment_bases = 0;
 std::map<std::string, double> placed_fragments_by_cell;
-std::map<std::string, double> placed_bases_by_cell;
+std::map<std::string, double> fragment_bases_by_cell;
 // With --demultiplex: the directory where we write one GTF per cell (empty:
 // none), next to the output GTF
 std::string demultiplexed_dir;

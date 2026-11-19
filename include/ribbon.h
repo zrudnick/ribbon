@@ -654,6 +654,10 @@ namespace ribbon {
     // Read 1 of a pair (BAM flag); with --sq3 the start of a read 1 with a UMI
     // is the 5' end of its molecule (see drop_unsupported_single_exons)
     bool is_read1 = false;
+    // One mate of a pair whose other mate is mapped (BAM flags). Without its
+    // mate in the bundle it counts as half a fragment for --quant (see
+    // fill_transfrags), so the two mates of a split pair make one fragment
+    bool has_mapped_mate = false;
     // With --sq3, the strand that the read's UMI gave it when it was read
     // ('.' for a read without a UMI). Grouping keeps it (has_umi_strand);
     // the 5' counts use it (collect_umi_starts)
@@ -685,6 +689,7 @@ namespace ribbon {
       bc = rd.bc; // SCELL
       ub = rd.ub; // SCELL
       is_read1 = rd.is_read1;
+      has_mapped_mate = rd.has_mapped_mate;
       umi_strand = rd.umi_strand;
       len = rd.len;
       read_count = rd.read_count;
@@ -796,12 +801,12 @@ namespace ribbon {
     // TPM (see write_final_output)
     std::vector<double> cell_frag_len;
     std::vector<double> cell_sum_cov;
-    // The fragments placed into the transfrags of each cell, and the bases
-    // they added to the nodes (the units of a transcript's cov): a
-    // transcript's read count is its cov x length / (bases per fragment)
-    // (see assign_fragment_to_transfrags and QuantTables)
+    // The fragments placed into the transfrags of each cell, and their aligned
+    // bases (both mates, an overlap of the mates once): a transcript's read
+    // count is its cov x length / (bases per fragment) (see
+    // assign_fragment_to_transfrags and QuantTables)
     std::vector<double> cell_placed_fragments;
-    std::vector<double> cell_placed_bases;
+    std::vector<double> cell_fragment_bases;
 
     std::string ref_seq; // reference sequence name
     char *gseq; // actual genomic sequence for the bundle
@@ -946,7 +951,7 @@ namespace ribbon {
       cell_frag_len.clear();
       cell_sum_cov.clear();
       cell_placed_fragments.clear();
-      cell_placed_bases.clear();
+      cell_fragment_bases.clear();
       counts.reset();
       GFREE(gseq);
       GFREE(tso_gseq);
