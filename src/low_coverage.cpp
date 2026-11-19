@@ -24,13 +24,6 @@ namespace ribbon {
   // Width of the region on each side of a boundary whose coverage we compare.
   const int32_t adjacent_region_len = 1;
 
-  // Coverage per bp and per cell under which a node that touches no other node
-  // is flagged as low coverage. The node coverage is pooled over the cells that
-  // have reads in the bundle, so the cutoff is this value times their number.
-  // On the 192 simulated cells this gave a small gain in precision for a
-  // smaller loss in sensitivity (about 1.5 reads per bp over all 192 cells).
-  const double lonely_node_min_coverage_per_cell = 0.0078;
-
   // Looks at the edges that join node i to its parents (at its start) or to
   // its children (at its end). If the coverage outside the boundary is high
   // next to the coverage inside, the edges to the nodes that are not next to i
@@ -257,21 +250,6 @@ namespace ribbon {
             node_coverages[i].cov, true, low_cov_flags);
         flag_low_coverage_adjacent_nodes(context, node_coverages[i].n,
             node_coverages[i].cov, false, low_cov_flags);
-      }
-    }
-
-    // Flag the lonely nodes: a node that touches no other node is never
-    // compared with a neighbor above, so we judge it by its own coverage.
-    GraphNodeList& nodes = context.graph.nodes;
-    double lonely_node_min_coverage = lonely_node_min_coverage_per_cell
-                                      * count_of(context.bundle->cell_name);
-    for (int32_t i = 1; i < context.graph.node_count - 1; i++) {
-      bool touches_previous = i > 1 && nodes[i - 1]->end + 1 == nodes[i]->start;
-      bool touches_next = i + 1 < context.graph.node_count - 1
-                          && nodes[i]->end + 1 == nodes[i + 1]->start;
-      if (!touches_previous && !touches_next && !low_cov_flags[i]
-          && nodes[i]->cov / nodes[i]->len() < lonely_node_min_coverage) {
-        low_cov_flags[i] = 1;
       }
     }
   }
