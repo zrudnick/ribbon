@@ -340,11 +340,8 @@ namespace ribbon {
                                      float rescue_threshold, bool leftwards,
                                      const BitVec& low_cov_flags,
                                      BitVec& cell_low_cov_flags) {
-    bool rescue_by_ratio = node_coverage > CHI_WIN
+    bool rescue = node_coverage > CHI_WIN
         && neighbor_coverage > rescue_threshold * node_coverage;
-    bool rescue_by_minimum = node_coverage <= CHI_WIN
-        && neighbor_coverage > SCELL_COV; // v3
-    bool rescue = rescue_by_ratio || rescue_by_minimum;
 
     // True if node j is flagged and touches the node on its right (leftwards)
     // or on its left (rightwards).
@@ -443,7 +440,7 @@ namespace ribbon {
                 cell_low_cov_flags);
           }
 
-          if (!cell_low_cov_flags[i] || node_coverage[i] > SCELL_COV) {
+          if (!cell_low_cov_flags[i]) {
             if (node_coverage[i] > node_coverage[seed_node]) seed_node = i;
             float through_abundance = 0;
             int32_t transfrag_count = count_of(current_node->transfrag_ids);

@@ -965,7 +965,6 @@ namespace ribbon {
 
 #define CHI_WIN 100
 #define CHI_THR 50
-#define SCELL_COV 20
 #define SCELL_TOL 0.3 // scell tollerance for errors v17
 
 const double epsilon = 0.000001; //-E
