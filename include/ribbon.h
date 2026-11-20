@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <functional>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <unordered_map>
 #include <unordered_set>
@@ -765,6 +766,10 @@ namespace ribbon {
     // With --sq3: the UMI molecules of each cell that start at the 5' end and
     // fit the exons (see count_molecules_of_predictions); empty otherwise
     std::vector<float> cell_molecules;
+    // With --quant: each cell's coverage with the coverage of shared nodes
+    // re-split between the cell's reported transcripts by their own reads
+    // (resplit_quant_coverage); --quant uses it instead of cell_cov where set
+    std::vector<float> cell_quant_cov;
     // SCELL
     CPrediction(int32_t _gene_no = 0, GffObj *guide = NULL, int32_t _cell = -1,
                 int32_t g_start = 0, int32_t g_end = 0, double _cov = 0,
@@ -778,7 +783,8 @@ namespace ribbon {
           cov(c.cov), strand(c.strand), tlen(c.tlen), flag(c.flag),
           exons(c.exons), exon_cov(c.exon_cov), cell_cov(c.cell_cov),
           flow_cov(c.flow_cov), path_nodes(c.path_nodes),
-          raw_ratio(c.raw_ratio), cell_molecules(c.cell_molecules) {}
+          raw_ratio(c.raw_ratio), cell_molecules(c.cell_molecules),
+          cell_quant_cov(c.cell_quant_cov) {}
     ~CPrediction() { // GFREE(id);
     }
   };
@@ -787,6 +793,28 @@ namespace ribbon {
   using PredictionList = std::vector<std::unique_ptr<CPrediction>>;
 
   // A bundle: all the data parsed from the BAM file for one genomic region.
+  // With --quant: one path of a cell in a graph, kept past the graph for the
+  // re-split of shared coverage (save_quant_paths, resplit_quant_coverage)
+  struct QuantPath {
+    char strand = '.';
+    std::vector<int32_t> intron_chain; // intron start and end coordinates
+    uint32_t start = 0, end = 0; // genomic span of its nodes
+    std::vector<int32_t> nodes; // graph node ids, source and sink included
+    std::vector<float> taken; // coverage the flow gave it at each node
+  };
+
+  // With --quant: a cell's paths in one graph, the lengths of their nodes, and
+  // the cell's read transfrags (abundance before the flow) with the paths each
+  // one fits
+  struct QuantGroup {
+    int32_t cell = -1;
+    int32_t sink = 0; // the graph's sink node id
+    double fragment_len = 0; // the bundle's mean aligned bases per fragment
+    std::vector<QuantPath> paths;
+    std::map<int32_t, int32_t> node_len;
+    std::vector<std::pair<float, std::vector<int32_t>>> transfrags;
+  };
+
   struct BundleData {
     int32_t idx; // index in the main bundles array
     int32_t start;
@@ -805,6 +833,8 @@ namespace ribbon {
     // bases (both mates, an overlap of the mates once): a transcript's read
     // count is its cov x length / (bases per fragment) (see
     // assign_fragment_to_transfrags and QuantTables)
+    // With --quant: the paths of each cell and graph (see QuantGroup)
+    std::vector<QuantGroup> quant_groups;
     std::vector<double> cell_placed_fragments;
     std::vector<double> cell_fragment_bases;
 
@@ -950,6 +980,7 @@ namespace ribbon {
       sum_cov = 0;
       cell_frag_len.clear();
       cell_sum_cov.clear();
+      quant_groups.clear();
       cell_placed_fragments.clear();
       cell_fragment_bases.clear();
       counts.reset();

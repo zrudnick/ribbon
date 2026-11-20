@@ -267,17 +267,22 @@ namespace ribbon {
       pooled_row.molecules = molecules.empty() ? 0 : atof(molecules.c_str());
       add(pooled, pooled_row);
 
-      // Each cell
+      // Each cell: the counts come from the re-split coverage when the line has
+      // one for the cell (cell_quant_cov), else from the cell's coverage
+      std::map<std::string, double> quant_cov;
+      for (const auto& cell : parse_cell_values(line, "cell_quant_cov"))
+        quant_cov[cell.first] = cell.second;
       for (const CellValues& cell : cell_values_of(line)) {
         Row cell_row = row;
-        cell_row.cov = cell.cov;
+        auto resplit = quant_cov.find(cell.cell);
+        cell_row.cov = resplit != quant_cov.end() ? resplit->second : cell.cov;
         cell_row.tpm = cell.tpm;
         cell_row.molecules = cell.molecules;
         auto bases = fragment_bases_by_cell.find(cell.cell);
         auto fragments = placed_fragments_by_cell.find(cell.cell);
         if (bases != fragment_bases_by_cell.end() && bases->second > 0.001
             && fragments != placed_fragments_by_cell.end())
-          cell_row.num_reads = cell.cov * len * fragments->second
+          cell_row.num_reads = cell_row.cov * len * fragments->second
               / bases->second;
         add(cell_tables[cell.cell], cell_row);
       }
@@ -518,6 +523,13 @@ namespace ribbon {
     if (cells_with_coverage) {
       fprintf(f_out, " no_cells \"%d\";", cells_with_coverage);
     }
+    // With --quant: each cell's re-split coverage (see resplit_quant_coverage)
+    if (!quant_dir.empty())
+      for (int32_t cell = 0; cell < count_of(cell_names); ++cell)
+        if (p.cell_cov[cell] > 0 && cell < count_of(p.cell_quant_cov)
+            && p.cell_quant_cov[cell] > 0)
+          fprintf(f_out, " cell_quant_cov \"%s:%f\";",
+                  cell_names[cell]->c_str(), p.cell_quant_cov[cell]);
 
     // With --sq3, the molecules of each cell that has the transcript and any
     for (int32_t cell = 0; cell < count_of(p.cell_molecules); ++cell)

@@ -1144,6 +1144,151 @@ namespace ribbon {
     bool operator<(const StartWindow& o) const { return lo < o.lo; }
   };
 
+  // With --quant: in each cell and graph (QuantGroup, see save_quant_paths),
+  // re-splits the coverage that the flow gave the cell's reported transcripts
+  // at the nodes they share, in proportion to how strongly each is expressed:
+  // its own reads (read transfrags that fit only it among the reported ones)
+  // per position where an own read can start (its unique nodes' length plus one
+  // fragment per run of unique nodes or edges). The greedy flow gives shared
+  // nodes mostly to the first path. Paths that the filters dropped keep their
+  // share (it is not reported). Sets cell_quant_cov; assembly is not changed.
+  void resplit_quant_coverage(BundleData *bundle) {
+    if (bundle->quant_groups.empty()) return;
+    PredictionList& predictions = bundle->predictions;
+    int32_t cell_count = count_of(bundle->cell_name);
+
+    // The kept spliced predictions by strand and intron chain
+    std::map<std::pair<char, std::vector<int32_t>>, CPrediction *> by_chain;
+    for (auto& p : predictions) {
+      if (!p->flag || count_of(p->exons) < 2) continue;
+      std::vector<int32_t> chain;
+      for (int32_t i = 0; i + 1 < count_of(p->exons); i++) {
+        chain.push_back(p->exons[i].end);
+        chain.push_back(p->exons[i + 1].start);
+      }
+      by_chain[{p->strand, chain}] = p.get();
+    }
+    // The kept prediction a path became in the cell (NULL if none)
+    auto reported_as = [&](const QuantPath& path,
+                           int32_t cell) -> CPrediction * {
+      CPrediction *found = NULL;
+      if (!path.intron_chain.empty()) {
+        auto it = by_chain.find({path.strand, path.intron_chain});
+        if (it != by_chain.end()) found = it->second;
+      } else {
+        for (auto& p : predictions)
+          if (p->flag && count_of(p->exons) == 1 && p->strand == path.strand
+              && p->start <= path.end && path.start <= p->end) {
+            found = p.get();
+            break;
+          }
+      }
+      if (found && cell < count_of(found->cell_cov)
+          && found->cell_cov[cell] > 0)
+        return found;
+      return NULL;
+    };
+
+    for (const QuantGroup& group : bundle->quant_groups) {
+      int32_t cell = group.cell;
+      std::vector<int32_t> kept; // the group's paths that were reported
+      std::vector<CPrediction *> prediction_of;
+      for (int32_t k = 0; k < count_of(group.paths); k++) {
+        CPrediction *p = reported_as(group.paths[k], cell);
+        prediction_of.push_back(p);
+        if (p) kept.push_back(k);
+      }
+      if (count_of(kept) < 2) continue; // nothing to share
+      std::vector<bool> is_kept(group.paths.size(), false);
+      for (int32_t k : kept) is_kept[k] = true;
+
+      // Own reads among the reported paths
+      std::vector<double> own(group.paths.size(), 0);
+      for (const auto& [abundance, fitting] : group.transfrags) {
+        int32_t only = -1, n = 0;
+        for (int32_t k : fitting)
+          if (is_kept[k]) { only = k; n++; }
+        if (n == 1) own[only] += abundance;
+      }
+
+      // The reported paths through each node and each edge
+      std::map<int32_t, std::vector<int32_t>> paths_of_node;
+      std::map<std::pair<int32_t, int32_t>, int32_t> paths_on_edge;
+      for (int32_t k : kept) {
+        const std::vector<int32_t>& nodes = group.paths[k].nodes;
+        for (int32_t j = 0; j < count_of(nodes); j++) {
+          if (nodes[j] > 0 && nodes[j] < group.sink)
+            paths_of_node[nodes[j]].push_back(k);
+          if (j) paths_on_edge[{nodes[j - 1], nodes[j]}]++;
+        }
+      }
+
+      // Own reads per position where an own read can start
+      std::vector<double> density(group.paths.size(), 0);
+      for (int32_t k : kept) {
+        const std::vector<int32_t>& nodes = group.paths[k].nodes;
+        double positions = 0;
+        bool in_run = false;
+        for (int32_t j = 0; j < count_of(nodes); j++) {
+          int32_t node = nodes[j];
+          bool unique_node = node > 0 && node < group.sink
+              && count_of(paths_of_node[node]) == 1;
+          bool unique_edge = j && nodes[j - 1] > 0 && node < group.sink
+              && paths_on_edge[{nodes[j - 1], node}] == 1;
+          if (unique_node) positions += group.node_len.at(node);
+          if (unique_node || unique_edge) {
+            if (!in_run) positions += group.fragment_len;
+            in_run = true;
+          } else in_run = false;
+        }
+        if (positions > 0) density[k] = own[k] / positions;
+      }
+
+      // Split what the flow gave the reported paths at each node by density;
+      // where one of them has no own reads, keep the flow's split there
+      std::vector<double> bases(group.paths.size(), 0);
+      std::vector<double> length(group.paths.size(), 0);
+      for (const auto& [node, ks] : paths_of_node) {
+        double density_total = 0, given_out = 0;
+        bool all_have_own = true;
+        std::vector<double> taken;
+        for (int32_t k : ks) {
+          if (density[k] <= 0) all_have_own = false;
+          density_total += density[k];
+          const QuantPath& path = group.paths[k];
+          int32_t j = std::find(path.nodes.begin(), path.nodes.end(), node)
+              - path.nodes.begin();
+          taken.push_back(path.taken[j]);
+          given_out += taken.back();
+        }
+        for (int32_t i = 0; i < count_of(ks); i++) {
+          bases[ks[i]] += all_have_own && density_total > 0
+              ? given_out * density[ks[i]] / density_total : taken[i];
+          length[ks[i]] += group.node_len.at(node);
+        }
+      }
+
+      // Each path's coverage; copies of one transcript in the cell (paths with
+      // the same intron chain) add up, as in its cell_cov
+      std::map<CPrediction *, double> quant_cov;
+      for (int32_t k : kept)
+        if (length[k] > 0) quant_cov[prediction_of[k]] += bases[k] / length[k];
+      for (auto& [p, coverage] : quant_cov) {
+        p->cell_quant_cov.resize(cell_count, 0.0);
+        p->cell_quant_cov[cell] = coverage;
+      }
+    }
+  }
+
+  // A prediction's coverage in a cell for --quant: the re-split coverage
+  // (cell_quant_cov) if it has one there, else its cell coverage.
+  double quant_coverage(const CPrediction& prediction, int32_t cell) {
+    if (cell < count_of(prediction.cell_quant_cov)
+        && prediction.cell_quant_cov[cell] > 0)
+      return prediction.cell_quant_cov[cell];
+    return prediction.cell_cov[cell];
+  }
+
   // With --sq3, counts for each kept prediction and cell the UMI molecules
   // whose 5' end lies in its StartWindow and whose reads all fit its exons
   // (cell_molecules). A molecule that fits several predictions of its cell is
@@ -1208,13 +1353,14 @@ namespace ribbon {
           }
         if (!fits) continue;
         fitting.push_back(it->p);
-        fitting_cov += prediction.cell_cov[molecule.cell];
+        fitting_cov += quant_coverage(prediction, molecule.cell);
       }
 
-      // Split the molecule by the predictions' coverage in the cell
+      // Split the molecule by the predictions' coverage in the cell (--quant's
+      // coverage, see resplit_quant_coverage)
       for (int32_t p : fitting)
         predictions[p]->cell_molecules[molecule.cell] += molecule.weight
-            * predictions[p]->cell_cov[molecule.cell] / fitting_cov;
+            * quant_coverage(*predictions[p], molecule.cell) / fitting_cov;
     }
   }
 
@@ -1252,6 +1398,9 @@ namespace ribbon {
 
     // Novel spliced transcripts need distinct evidence for each junction.
     drop_paths_with_weak_junctions(bundle);
+
+    // With --quant, shared coverage re-split between each cell's transcripts.
+    resplit_quant_coverage(bundle);
 
     // With --sq3, the UMI molecules of each kept transcript and cell.
     count_molecules_of_predictions(bundle);

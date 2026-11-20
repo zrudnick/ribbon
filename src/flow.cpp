@@ -535,6 +535,94 @@ namespace ribbon {
     return true;
   }
 
+  // With --quant: keeps, for each cell, what the re-split of shared coverage
+  // needs from its paths in this graph (QuantGroup): each path's nodes and the
+  // coverage the flow gave it there (its exon's exon_cov times the node's
+  // length), and which paths each of the cell's read transfrags fits (before
+  // the flow). The re-split itself runs after the filters, among the reported
+  // transcripts (resplit_quant_coverage in predictions.cpp).
+  void save_quant_paths(
+      const FlowContext& context,
+      const std::vector<std::vector<float>>& original_cell_abundance,
+      int32_t first_prediction, double fragment_len) {
+    PredictionList& predictions = context.bundle->predictions;
+    int32_t prediction_count = count_of(predictions);
+    int32_t sink = context.graph.node_count - 1;
+    int32_t transfrag_count = count_of(context.graph.transfrag);
+
+    // The predictions (paths) of each cell in this graph
+    std::map<int32_t, std::vector<int32_t>> paths_of_cell;
+    for (int32_t p = first_prediction; p < prediction_count; p++)
+      if (predictions[p] && predictions[p]->flag && predictions[p]->cell >= 0
+          && !predictions[p]->path_nodes.empty())
+        paths_of_cell[predictions[p]->cell].push_back(p);
+
+    std::vector<int32_t> position_on_path(context.graph.node_count, -1);
+    for (const auto& [cell, preds] : paths_of_cell) {
+      if (count_of(preds) < 2) continue; // nothing to share
+      QuantGroup group;
+      group.cell = cell;
+      group.sink = sink;
+      group.fragment_len = fragment_len;
+
+      // Each path: strand, intron chain, span, nodes and what it took there
+      for (int32_t p : preds) {
+        const CPrediction& prediction = *predictions[p];
+        QuantPath path;
+        path.strand = context.strand;
+        path.nodes = prediction.path_nodes;
+        for (int32_t j = 0; j < count_of(path.nodes); j++) {
+          int32_t node = path.nodes[j];
+          if (node <= 0 || node >= sink) continue;
+          CGraphnode& graph_node = *context.graph.nodes[node];
+          group.node_len[node] = graph_node.len();
+          if (!path.start) path.start = graph_node.start;
+          if (path.end && path.end + 1 < graph_node.start) {
+            path.intron_chain.push_back(path.end);
+            path.intron_chain.push_back(graph_node.start);
+          }
+          path.end = graph_node.end;
+        }
+        for (int32_t node : path.nodes) {
+          float taken = 0;
+          if (node > 0 && node < sink) {
+            CGraphnode& graph_node = *context.graph.nodes[node];
+            for (int32_t e = 0; e < count_of(prediction.exons); e++)
+              if (prediction.exons[e].start <= graph_node.start
+                  && graph_node.end <= prediction.exons[e].end) {
+                taken = prediction.exon_cov[e] * graph_node.len();
+                break;
+              }
+          }
+          path.taken.push_back(taken);
+        }
+        group.paths.push_back(path);
+      }
+
+      // The cell's read transfrags and the paths each one fits
+      for (int32_t t = 0; t < transfrag_count; t++) {
+        const CTransfrag& tf = *context.graph.transfrag[t];
+        if (tf.made_by_guide || tf.nodes.empty() || !tf.nodes[0]
+            || tf.nodes.back() == sink)
+          continue;
+        float abundance = original_cell_abundance[t][cell];
+        if (abundance <= epsilon) continue;
+        std::vector<int32_t> fitting;
+        for (int32_t k = 0; k < count_of(group.paths); k++) {
+          const std::vector<int32_t>& nodes = group.paths[k].nodes;
+          for (int32_t j = 0; j < count_of(nodes); j++)
+            position_on_path[nodes[j]] = j;
+          if (is_transfrag_on_whole_path(context, tf, position_on_path,
+                                         nodes[1], nodes[count_of(nodes) - 2]))
+            fitting.push_back(k);
+          for (int32_t node : nodes) position_on_path[node] = -1;
+        }
+        if (!fitting.empty()) group.transfrags.push_back({abundance, fitting});
+      }
+      context.bundle->quant_groups.push_back(std::move(group));
+    }
+  }
+
   // True if the cell has a read transfrag (no source or sink link, none made
   // by guides) with abundance on any real node of path, from the abundances
   // before the flow (original_cell_abundance).

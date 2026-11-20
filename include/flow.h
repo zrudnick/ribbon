@@ -35,6 +35,11 @@ namespace ribbon {
                                     BitVec& low_cov_flags,
                                     int32_t prev_prediction_count);
 
+  void save_quant_paths(
+      const FlowContext& context,
+      const std::vector<std::vector<float>>& original_cell_abundance,
+      int32_t first_prediction, double fragment_len);
+
   void drop_shadowed_paths(
       const FlowContext& context,
       const std::vector<std::vector<float>>& original_cell_abundance,

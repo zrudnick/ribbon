@@ -7,6 +7,8 @@ extern float multi_read_frac;
 extern int32_t min_transcript_len;
 // See drop_shadowed_paths in flow.cpp (off with --keep-shadowed-paths)
 extern bool drop_shadowed;
+// With --quant: the directory of the read count tables (empty: off)
+extern std::string quant_dir;
 // --sq3, and the deduplication it turns on (off with --keep-pcr-copies; see
 // weight_reads_by_molecule)
 extern bool smartseq3;
@@ -282,7 +284,7 @@ namespace ribbon {
           // Keep the cells' abundances from before the flow, and where this
           // graph's predictions start, for drop_shadowed_paths.
           std::vector<std::vector<float>> original_cell_abundance;
-          if (drop_shadowed)
+          if (drop_shadowed || !quant_dir.empty())
             for (const auto& transfrag : graph.transfrag)
               original_cell_abundance.push_back(transfrag->cell_abundance);
           int32_t first_prediction = count_of(bundle->predictions);
@@ -301,6 +303,20 @@ namespace ribbon {
           if (drop_shadowed)
             drop_shadowed_paths(context, original_cell_abundance,
                                 first_prediction);
+          // With --quant: keep what the re-split of shared coverage needs (it
+          // runs after the filters, see resplit_quant_coverage), with the
+          // bundle's mean fragment size (see assign_fragment_to_transfrags)
+          if (!quant_dir.empty()) {
+            double fragments = 0, bases = 0;
+            for (int32_t c = 0; c < count_of(bundle->cell_placed_fragments);
+                 c++) {
+              fragments += bundle->cell_placed_fragments[c];
+              bases += bundle->cell_fragment_bases[c];
+            }
+            if (fragments > 0)
+              save_quant_paths(context, original_cell_abundance,
+                               first_prediction, bases / fragments);
+          }
           for (int32_t p = first_prediction; p < count_of(bundle->predictions);
                p++)
             if (bundle->predictions[p]) bundle->predictions[p]->path_nodes.clear();
