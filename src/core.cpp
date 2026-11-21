@@ -1,4 +1,5 @@
 #include "ribbon.h"
+#include "predictions.h"
 #include <map>
 #include <tuple>
 
@@ -461,6 +462,10 @@ namespace ribbon {
                                || state.start_group['+'] != NULL;
     if (has_stranded_groups) {
       GraphTables tables;
+      // With --sq3 (on the mitochondrial chromosome, or everywhere with
+      // --tso-filter): transcript starts from 5' UMI molecules, used as trim
+      // points when the graph is built
+      find_start_peaks(bundle);
       get_splice_graphs(bundle, state, tables, guide_boundaries);
       free_pre_graphs(state);
       fill_transfrags(bundle, state, tables);

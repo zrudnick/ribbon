@@ -834,6 +834,10 @@ namespace ribbon {
     // count is its cov x length / (bases per fragment) (see
     // assign_fragment_to_transfrags and QuantTables)
     // With --quant: the paths of each cell and graph (see QuantGroup)
+    // With --sq3 (the mitochondrial chromosome, or all with --tso-filter): the
+    // positions where a transcript starts by its 5' UMI molecules, per strand,
+    // with the abundance of their source or sink link (see find_start_peaks)
+    PerStrand<std::vector<std::pair<uint32_t, float>>> start_peaks;
     std::vector<QuantGroup> quant_groups;
     std::vector<double> cell_placed_fragments;
     std::vector<double> cell_fragment_bases;
@@ -980,6 +984,8 @@ namespace ribbon {
       sum_cov = 0;
       cell_frag_len.clear();
       cell_sum_cov.clear();
+      start_peaks['-'].clear();
+      start_peaks['+'].clear();
       quant_groups.clear();
       cell_placed_fragments.clear();
       cell_fragment_bases.clear();

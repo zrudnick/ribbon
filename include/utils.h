@@ -1,4 +1,5 @@
 #pragma once
+#include <string>
 
 #include <algorithm>
 #include <cstdint>
@@ -55,4 +56,6 @@ namespace ribbon {
   bool erase_value(std::vector<int32_t>& v, int32_t value);
 
   void insert_sorted_unique(std::vector<int32_t>& v, int32_t value);
+
+  bool is_mitochondrial(const std::string& sequence_name);
 } // namespace ribbon

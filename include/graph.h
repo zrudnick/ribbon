@@ -43,6 +43,11 @@ namespace ribbon {
     SegmentNodesList *segment_nodes;
     CGraphnode *source;
     CGraphnode *sink;
+    // Extra transcript starts from 5' UMI molecules (BundleData::start_peaks)
+    const PerStrand<std::vector<std::pair<uint32_t, float>>> *start_peaks;
+    // On the mitochondrial chromosome no path crosses a trim point: its mRNAs
+    // are cut out of one long precursor (see trim_node_at_all_points)
+    bool no_crossing_trims;
   };
 
   // This can work as a guide keeper too, where pos is the guideidx, abundance

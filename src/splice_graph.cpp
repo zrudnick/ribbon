@@ -857,7 +857,8 @@ namespace ribbon {
     sink = sink_owner.get();
     context = {strand, graph_idx, ref_start, cell_count, &bp_coverage, &graph,
                &tables_in.pre_graph_segment_to_graph_nodes[strand_in], source,
-               sink};
+               sink, &bundle_in->start_peaks,
+               is_mitochondrial(bundle_in->ref_seq)};
     find_guide_boundary_in_pre_graph();
   }
 

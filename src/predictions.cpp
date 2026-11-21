@@ -66,6 +66,23 @@ namespace ribbon {
   const float min_umi_start_molecules = 1;
   const int32_t umi_start_window = 100;
 
+  // With --sq3, on the mitochondrial chromosome (and on every chromosome with
+  // --tso-filter), a transcript starts where at least start_peak_min_molecules
+  // UMI molecules start within
+  // start_peak_merge_len bp, coverage over start_peak_window bp after the pile
+  // is at least start_peak_min_step times the coverage before it, and the pile
+  // is at least start_peak_min_share of that coverage after (a new population
+  // of molecules, not a few starts inside a transcript, such as TSO strand
+  // invasion). On real chrMT this finds 13 of the 15 mRNA / rRNA starts;
+  // genome-wide it costs about 0.35 precision points without --tso-filter and
+  // almost nothing with it (ribbon_data/benchmark/missed_isoforms/README.md);
+  // see find_start_peaks.
+  const double start_peak_min_molecules = 10;
+  const int32_t start_peak_merge_len = 5;
+  const int32_t start_peak_window = 50;
+  const double start_peak_min_step = 2;
+  const double start_peak_min_share = 0.05;
+
   // A novel multi-exon prediction needs min_junction_evidence distinct
   // pieces of evidence, pooled over cells, for each of its junctions (see
   // drop_paths_with_weak_junctions).
@@ -963,9 +980,14 @@ namespace ribbon {
     CellReadStarts starts
         = collect_cell_read_starts(bundle, count_of(bundle->cell_name));
 
+    // The background test is against unspliced pre-mRNA in introns; the
+    // mitochondrial genome has none, and its genes lie next to each other, so
+    // there it would compare a gene with its neighbours
+    bool mitochondrial = is_mitochondrial(bundle->ref_seq);
+
     for (auto& p : predictions) {
       if (!p->flag || p->t_eq || count_of(p->exons) != 1) continue;
-      if (!single_exon_stands_out(starts, *p)) {
+      if (!mitochondrial && !single_exon_stands_out(starts, *p)) {
         p->flag = false;
         continue;
       }
@@ -1404,6 +1426,71 @@ namespace ribbon {
 
     // With --sq3, the UMI molecules of each kept transcript and cell.
     count_molecules_of_predictions(bundle);
+  }
+
+  // With --sq3, on the mitochondrial chromosome, and on every chromosome with
+  // --tso-filter (bundle->tso_gseq; without it strand invasion piles pass):
+  // fills bundle->start_peaks with the positions where a transcript starts by
+  // its 5' UMI molecules (see start_peak_min_molecules). Mitochondrial mRNAs
+  // are cut out of one long precursor, so coverage alone rarely separates them.
+  // The source (or sink) link of a peak gets the coverage jump / DROP, like a
+  // coverage trim.
+  void find_start_peaks(BundleData *bundle) {
+    if (!smartseq3
+        || (!is_mitochondrial(bundle->ref_seq) && !bundle->tso_gseq))
+      return;
+    PerStrand<ReadStarts> umi_starts = collect_umi_starts(bundle, true, true);
+
+    // Mean coverage per bp of a genomic window (no reads outside the bundle)
+    auto mean_coverage = [&](int32_t lo, int32_t hi) {
+      lo = std::max(lo, (int32_t)bundle->start);
+      hi = std::min(hi, (int32_t)bundle->end);
+      if (hi < lo) return 0.0;
+      return get_region_coverage('.', lo - bundle->start, hi - bundle->start,
+                                 bundle->bp_coverage)
+             / start_peak_window;
+    };
+
+    for (char strand : {'-', '+'}) {
+      // The molecules' 5' ends, sorted, with their weights
+      const auto& starts = umi_starts[strand].by_position;
+      size_t i = 0;
+      while (i < starts.size()) {
+        // A pile: 5' ends at most start_peak_merge_len apart; its peak is the
+        // position with the most molecules
+        double molecules = 0, peak_molecules = -1;
+        int32_t peak = starts[i].first, last = starts[i].first;
+        while (i < starts.size()
+               && starts[i].first - last <= start_peak_merge_len) {
+          int32_t position = starts[i].first;
+          double here = 0;
+          while (i < starts.size() && starts[i].first == position)
+            here += starts[i++].second;
+          molecules += here;
+          if (here > peak_molecules) {
+            peak_molecules = here;
+            peak = position;
+          }
+          last = position;
+        }
+        if (molecules < start_peak_min_molecules) continue;
+
+        // The coverage step across the peak, in the transcript's direction
+        double before, after;
+        if (strand == '+') {
+          before = mean_coverage(peak - start_peak_window, peak - 1);
+          after = mean_coverage(peak, peak + start_peak_window - 1);
+        } else {
+          before = mean_coverage(peak + 1, peak + start_peak_window);
+          after = mean_coverage(peak - start_peak_window + 1, peak);
+        }
+        if (after < start_peak_min_step * before
+            || molecules < start_peak_min_share * after)
+          continue;
+        bundle->start_peaks[strand].push_back(
+            {(uint32_t)peak, (float)((after - before) / DROP)});
+      }
+    }
   }
 
 } // namespace ribbon

@@ -68,6 +68,8 @@ extern int32_t n_threads;
 extern std::unique_ptr<GFastaDb> g_fasta;
 // --tso-filter (see is_tso_strand_invasion in predictions.cpp)
 extern std::unique_ptr<GFastaDb> g_tso_fasta;
+// --mito (see is_mitochondrial in utils.cpp)
+extern std::string mito_name;
 extern std::string guide_gff;
 extern std::string out_fname;
 extern std::string out_dir;
@@ -205,8 +207,17 @@ namespace ribbon {
                    "with --sq3, the genome (FASTA) used to recognize TSO "
                    "strand invasion: a UMI molecule with GGG in the 4 bases "
                    "upstream of its 5' end does not count as a transcript "
-                   "start in the single-exon test or in the molecule counts "
-                   "(does not turn on the splice-motif checks of -S)");
+                   "start in the single-exon test or in the molecule counts; "
+                   "it also lets piles of UMI molecule starts start "
+                   "transcripts on every chromosome, not only the "
+                   "mitochondrial one (does not turn on the splice-motif "
+                   "checks of -S)");
+    app.add_option("--mito", mito_name,
+                   "name of the mitochondrial chromosome, if it is not one of "
+                   "the usual names (MT, chrM, chrMT, M, Mito, chrmt, "
+                   "mitochondrion_genome, MtDNA, Mt, or the RefSeq accession "
+                   "of a common model organism); its genes are transcribed "
+                   "polycistronically and get their own rules");
     app.add_option("--ref,--cram-ref", cram_ref_path,
                    "reference genome FASTA file for CRAM input");
     auto version_callback = [](int32_t) {

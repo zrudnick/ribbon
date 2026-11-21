@@ -48,6 +48,9 @@ bool require_umi_starts = true;
 // (drop_paths_with_weak_junctions in predictions.cpp);
 // --keep-weak-junction-paths: off
 bool require_junction_evidence = true;
+// --mito: the name of the mitochondrial chromosome when it is not one of the
+// usual ones (see is_mitochondrial in utils.cpp)
+std::string mito_name;
 // Weight of the per-cell abundance in the path-selection score (see
 // extend_path)
 double alpha = 1;

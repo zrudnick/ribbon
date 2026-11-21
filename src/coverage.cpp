@@ -408,9 +408,12 @@ namespace ribbon {
     }
   }
 
-  // Splits graph_node at its coverage-drop trim points (find_all_trim_points),
-  // left to right: a source trim links the new right piece from the source, a
-  // sink trim links the left piece to the sink. Returns the rightmost piece.
+  // Splits graph_node at its coverage-drop trim points (find_all_trim_points)
+  // and at the bundle's start peaks (find_start_peaks), left to right: a source
+  // trim links the new right piece from the source, a sink trim links the left
+  // piece to the sink. On the mitochondrial chromosome (no_crossing_trims) the
+  // pieces are not linked to each other: the left one also ends at the sink and
+  // the right one also starts at the source. Returns the rightmost piece.
   CGraphnode *trim_node_at_all_points(const GraphBuildContext& context,
       uint32_t new_end, CGraphnode *graph_node,
       PendingTransfragList& pending_transfrags, int32_t& node_count,
@@ -420,6 +423,31 @@ namespace ribbon {
     find_all_trim_points(context.ref_start, context.strand,
                          graph_node->start, new_end,
                          *context.bp_coverage, trim_point);
+
+    // Start peaks inside the node: a source trim on '+' (the 5' end is the
+    // left end), a sink trim on '-' (the right end), unless a coverage trim of
+    // the same kind is within coverage_window_len
+    bool is_source = context.strand == '+';
+    bool added_peak = false;
+    const auto& peaks = (*context.start_peaks)[context.strand];
+    for (const auto& [pos, abundance] : peaks) {
+      if (pos < graph_node->start + min_trim_segment_len
+          || pos + min_trim_segment_len > new_end)
+        continue;
+      bool near_trim = false;
+      for (const CTrimPoint& t : trim_point)
+        if (t.pos && t.start == is_source
+            && std::abs((int64_t)t.pos - (int64_t)pos) < coverage_window_len)
+          near_trim = true;
+      if (near_trim) continue;
+      trim_point.push_back(CTrimPoint(pos, abundance, is_source));
+      added_peak = true;
+    }
+    if (added_peak)
+      std::sort(trim_point.begin(), trim_point.end(),
+                [](const CTrimPoint& a, const CTrimPoint& b) {
+                  return a.pos < b.pos;
+                });
 
     // Split the node at each trim point and record its source or sink link.
     for (int32_t trim_i = 0; trim_i < count_of(trim_point); trim_i++)
@@ -435,12 +463,20 @@ namespace ribbon {
           context.source->child.push_back(graph_node->node_id);
           // This node has source as parent
           graph_node->parent.push_back(context.source->node_id);
+          pending_transfrags.push_back({0.0f, float(node_count - 1),
+                                        float(trim_point[trim_i].abundance)});
+          // Mitochondrial: the left piece ends at the sink instead of going on
+          if (context.no_crossing_trims) {
+            context.sink->parent.push_back(prev_node->node_id);
+            pending_transfrags.push_back({float(prev_node->node_id), -1.0f,
+                                          float(trim_point[trim_i].abundance)});
+            edge_count += 2;
+            continue;
+          }
           // This node is the child of previous node
           prev_node->child.push_back(graph_node->node_id);
           // This node has as parent the previous node
           graph_node->parent.push_back(prev_node->node_id);
-          pending_transfrags.push_back({0.0f, float(node_count - 1),
-                                        float(trim_point[trim_i].abundance)});
           // The link between the two halves has abundance 0: reads that span
           // the split make their own transfrag. StringTie gives it 1.0 (and 1.0
           // more to the source/sink link); we tested it, no difference
@@ -464,6 +500,18 @@ namespace ribbon {
           // so we can not create it here
           pending_transfrags.push_back({float(node_count - 2), -1.0f,
                                         float(trim_point[trim_i].abundance)});
+          // Mitochondrial: the right piece starts at the source instead of
+          // coming from the left one
+          if (context.no_crossing_trims) {
+            prev_node->child.pop_back();
+            graph_node->parent.pop_back();
+            context.source->child.push_back(graph_node->node_id);
+            graph_node->parent.push_back(context.source->node_id);
+            pending_transfrags.push_back({0.0f, float(graph_node->node_id),
+                                          float(trim_point[trim_i].abundance)});
+            edge_count += 2;
+            continue;
+          }
           // The link between the two halves has abundance 0: reads that span
           // the split make their own transfrag. StringTie gives it 1.0 (and 1.0
           // more to the source/sink link); we tested it, no difference
