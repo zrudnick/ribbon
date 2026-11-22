@@ -183,8 +183,9 @@ namespace ribbon {
       }
 
       // The adjacent node is low coverage unless it has a good connection
-      // elsewhere: to another node on the side that faces n, or to a node on
-      // the far side other than the one next to it and the source (or sink).
+      // elsewhere: to another node on the side that faces n, or to a node 
+      // on the far sideother than 
+      // the touching one next to it and the source (or sink).
       bool mark_low = true;
       std::vector<int32_t>& facing
           = leftwards ? adjacent_node->child : adjacent_node->parent;
@@ -199,13 +200,20 @@ namespace ribbon {
             break;
           }
       }
-      for (int32_t neighbor : far_side)
-        if (neighbor != terminal && neighbor != adjacent + step
+      // The next node is skipped only if it touches the adjacent node (then
+      // it is the continuation we walk next); across an intron it is a
+      // spliced connection like any other.
+      for (int32_t neighbor : far_side) {
+        bool is_touching_next = neighbor == adjacent + step
+            && (leftwards ? nodes[neighbor]->end + 1 == adjacent_node->start
+                          : adjacent_node->end + 1 == nodes[neighbor]->start);
+        if (neighbor != terminal && !is_touching_next
             && (leftwards ? is_good_edge(neighbor, adjacent)
                           : is_good_edge(adjacent, neighbor))) {
           mark_low = false;
           break;
         }
+      }
 
       if (mark_low) {
         low_cov_flags[adjacent] = 1;
