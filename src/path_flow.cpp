@@ -1,12 +1,15 @@
 #include "ribbon.h"
 #include "GThreads.h"
+#include <algorithm>
+#include <cfloat>
+#include <map>
 
 // minimum number for a transcript to be printed
 extern int32_t min_transcript_len;
 
-// Pushing flow along a path of the splice graph: how much a path carries,
-// depleting the transfrags that support it, and storing the path as a
-// transcript prediction.
+// The flow along a path of the splice graph: how much a path carries (max
+// flow for de novo paths, a bottleneck push for guides), depleting the
+// transfrags that support it, and storing the path as a transcript prediction.
 
 namespace ribbon {
 
@@ -14,10 +17,10 @@ namespace ribbon {
   // Single-cell coverage is sparse, so force a minimal (1-unit) flow through
   // the node instead of giving up.
   void apply_sparse_coverage_fallback(int32_t i,
-      std::vector<float>& path_in_abundance,
-      std::vector<float>& total_in_abundance,
-      std::vector<float>& path_out_abundance,
-      std::vector<float>& total_out_abundance) {
+                                      std::vector<float>& path_in_abundance,
+                                      std::vector<float>& total_in_abundance,
+                                      std::vector<float>& path_out_abundance,
+                                      std::vector<float>& total_out_abundance) {
     if (!path_in_abundance[i]) {
       path_in_abundance[i] = 1;
       if (total_in_abundance[i] < 1) total_in_abundance[i] = 1;
@@ -32,10 +35,10 @@ namespace ribbon {
   // entering/leaving capacities and totals of each node, capping it at every
   // node by the smaller side. Returns 0 if the flow is blocked.
   float compute_path_flow(int32_t path_len,
-                                 std::vector<float>& path_in_abundance,
-                                 std::vector<float>& total_in_abundance,
-                                 std::vector<float>& path_out_abundance,
-                                 std::vector<float>& total_out_abundance) {
+                          std::vector<float>& path_in_abundance,
+                          std::vector<float>& total_in_abundance,
+                          std::vector<float>& path_out_abundance,
+                          std::vector<float>& total_out_abundance) {
     float running_flow = path_in_abundance[1];
     for (int32_t i = 1; i < path_len - 1; i++) {
       float left_fraction = running_flow / total_in_abundance[i];
@@ -52,8 +55,8 @@ namespace ribbon {
   // below epsilon, or when zero_if_pooled_depleted is set and the pooled
   // abundance is negligible too. Returns true when it was floored to 0.
   bool deplete_transfrag_abundance(CTransfrag *t, int32_t cell,
-                                          double amount,
-                                          bool zero_if_pooled_depleted) {
+                                   double amount,
+                                   bool zero_if_pooled_depleted) {
     t->cell_abundance[cell] -= amount;
     bool is_cell_depleted = t->cell_abundance[cell] < epsilon;
     bool is_pooled_depleted = zero_if_pooled_depleted
@@ -68,15 +71,198 @@ namespace ribbon {
   // The transfrags of node that can have abundance in this cell: the list of
   // the cell when there is one, else all the transfrags of the node. The loops
   // over it check the abundance of the cell themselves.
-  const std::vector<int32_t>& transfrags_of_cell(
-      const FlowContext& context, int32_t node) {
+  const std::vector<int32_t>& transfrags_of_cell(const FlowContext& context,
+                                                 int32_t node) {
     if (context.cell_transfrags) return (*context.cell_transfrags)[node];
     return context.graph.nodes[node]->transfrag_ids;
   }
 
-  // Pushes a bottleneck flow along path (node ids from source to sink) using
-  // this cell's transfrag abundances and subtracts it from the transfrags that
-  // support the path. Fills node_flux; returns node_flux[1] (0 if no flow).
+  
+  // StringTie 1's node rates for this cell: at each node, the abundance of the
+  // transfrags that start there over that of those that end there (0 if either
+  // is 0). Max flow uses them to carry flow from one transfrag to the next.
+  std::vector<float> compute_cell_node_rates(const FlowContext& context) {
+    std::vector<float> node_rate(context.graph.node_count, 0);
+    for (int32_t i = 1; i < context.graph.node_count - 1; i++) {
+      float in = 0, out = 0;
+      for (int32_t t : transfrags_of_cell(context, i)) {
+        const CTransfrag& transfrag = *context.graph.transfrag[t];
+        float abundance = transfrag.cell_abundance[context.cell];
+        // A one-node transfrag counts as ending here, as in StringTie
+        if (transfrag.nodes.back() == i) in += abundance;
+        else if (transfrag.nodes[0] == i) out += abundance;
+      }
+      if (in > 0) node_rate[i] = out / in;
+    }
+    return node_rate;
+  }
+
+  // An edge of the flow network of one path (see max_flow_and_deplete_
+  // transfrags), between two path positions. Each edge has a reverse twin
+  // with capacity 0, through which flow can be sent back.
+  struct NetworkEdge {
+    int32_t to;
+    int32_t twin;
+    float capacity;
+    float flow;
+  };
+
+  // Breadth-first search for a source-to-sink path (positions 0 to n - 1) of
+  // edges with capacity left; pred_edge[v] is the edge that reached v.
+  // Returns true if the sink was reached.
+  bool find_augmenting_path(const std::vector<NetworkEdge>& edges,
+                            const std::vector<std::vector<int32_t>>& edges_of,
+                            std::vector<int32_t>& pred_edge) {
+    int32_t n = count_of(edges_of);
+    std::vector<bool> seen(n, false);
+    pred_edge.assign(n, -1);
+    std::vector<int32_t> queue = {0};
+    seen[0] = true;
+    for (size_t head = 0; head < queue.size(); head++) {
+      int32_t u = queue[head];
+      // Farther positions first (longer transfrags), as in StringTie
+      for (int32_t k = count_of(edges_of[u]) - 1; k >= 0; k--) {
+        const NetworkEdge& edge = edges[edges_of[u][k]];
+        if (!seen[edge.to] && edge.capacity - edge.flow > epsilon) {
+          seen[edge.to] = true;
+          pred_edge[edge.to] = edges_of[u][k];
+          queue.push_back(edge.to);
+        }
+      }
+    }
+    return seen[n - 1];
+  }
+
+  
+  // StringTie 1's max flow along path (node ids from source to sink) on this
+  // cell's abundances, subtracted from the transfrags that carry it. Fills
+  // node_flux; returns the flow (0 if none).
+  float max_flow_and_deplete_transfrags(const FlowContext& context,
+                                        std::vector<int32_t>& path,
+                                        BitVec& transfrag_on_path,
+                                        std::vector<float>& node_flux,
+                                        BitVec& current_path_bits) {
+    const SpliceGraph& graph = context.graph;
+    const std::vector<float>& node_rate = *context.node_rate;
+    int32_t cell = context.cell;
+    int32_t n = count_of(path);
+    std::vector<int32_t> position_of(graph.node_count, -1);
+    for (int32_t i = 0; i < n; i++) {
+      position_of[path[i]] = i;
+      node_flux.push_back(0.0);
+    }
+
+    // The network: one node per path position, one edge per compatible
+    // transfrag (first to last node, capacity = the cell's abundance). A node
+    // where no transfrag of the cell ends (rate 0) is joined to the source, one
+    // where none starts to the sink, so the reads enter and leave where they
+    // are. total_out: the cell's abundance leaving each node, before depletion.
+    std::vector<NetworkEdge> edges;
+    std::vector<std::vector<int32_t>> edges_of(n);
+    std::map<std::pair<int32_t, int32_t>, int32_t> edge_between;
+    struct NetworkTransfrag { int32_t t, first, last, edge; };
+    std::vector<NetworkTransfrag> network_transfrags;
+    std::vector<float> total_out(n, 0);
+    for (int32_t i = 0; i < n; i++) {
+      for (int32_t t : transfrags_of_cell(context, path[i])) {
+        const CTransfrag& transfrag = *graph.transfrag[t];
+        float abundance = transfrag.cell_abundance[cell];
+        if (!transfrag.abundance || abundance <= 0) continue;
+        if (i > 0 && i < n - 1 && transfrag.nodes[0] <= path[i]
+            && transfrag.nodes.back() > path[i])
+          total_out[i] += abundance;
+
+        // An edge for a compatible transfrag that starts here, ends on the path
+        if (transfrag.nodes[0] != path[i]) continue;
+        if (!transfrag_on_path[t]
+            && !current_path_bits.contains(transfrag.path_bits)) continue;
+        int32_t last = position_of[transfrag.nodes.back()];
+        if (last < 0) continue;
+        transfrag_on_path[t] = 1;
+        int32_t from = node_rate[path[i]] ? i : 0;
+        int32_t to = node_rate[transfrag.nodes.back()] ? last : n - 1;
+        if (from == to) continue;
+        auto [it, is_new] = edge_between.try_emplace({from, to},
+                                                     count_of(edges));
+        if (is_new) {
+          int32_t e = count_of(edges);
+          edges.push_back({to, e + 1, 0, 0});
+          edges.push_back({from, e, 0, 0});
+          edges_of[from].push_back(e);
+          edges_of[to].push_back(e + 1);
+        }
+        edges[it->second].capacity += abundance;
+        network_transfrags.push_back({t, i, last, it->second});
+      }
+    }
+    for (auto& node_edges : edges_of)
+      std::sort(node_edges.begin(), node_edges.end(),
+                [&edges](int32_t a, int32_t b) {
+                  return edges[a].to < edges[b].to;
+                });
+
+    // Edmonds-Karp. The flow is counted in what reaches the sink; at each node
+    // of an augmenting path the node rate converts it.
+    float flux = 0;
+    std::vector<int32_t> pred_edge;
+    while (find_augmenting_path(edges, edges_of, pred_edge)) {
+      // The path's edges from the sink back, with their rates
+      std::vector<int32_t> augmenting_edges;
+      std::vector<float> edge_rate;
+      float rate = 1;
+      float increment = FLT_MAX;
+      for (int32_t v = n - 1; v != 0; ) {
+        int32_t e = pred_edge[v];
+        int32_t u = edges[edges[e].twin].to;
+        augmenting_edges.push_back(e);
+        edge_rate.push_back(rate);
+        increment = std::min(increment,
+                             (edges[e].capacity - edges[e].flow) * rate);
+        // The rate of u converts its entering flow to its leaving flow
+        if (u != 0) {
+          int32_t before_u = edges[edges[pred_edge[u]].twin].to;
+          bool is_forward = u < v, was_forward = before_u < u;
+          if (is_forward && was_forward) rate *= node_rate[path[u]];
+          else if (!is_forward && !was_forward) rate /= node_rate[path[u]];
+        }
+        v = u;
+      }
+      if (!(increment > epsilon)) break;
+      for (int32_t k = 0; k < count_of(augmenting_edges); k++) {
+        int32_t e = augmenting_edges[k];
+        edges[e].flow += increment / edge_rate[k];
+        edges[edges[e].twin].flow -= increment / edge_rate[k];
+      }
+      flux += increment;
+    }
+    if (!(flux > epsilon)) return 0;
+
+    // Subtract the flow from the transfrags of each edge, in path order, and
+    // count it on the nodes it leaves.
+    std::vector<float> node_used(n, 0);
+    for (const NetworkTransfrag& nt : network_transfrags) {
+      NetworkEdge& edge = edges[nt.edge];
+      if (edge.flow <= 0) continue;
+      CTransfrag *transfrag = graph.transfrag[nt.t].get();
+      float val = std::min(edge.flow, transfrag->cell_abundance[cell]);
+      edge.flow -= val;
+      deplete_transfrag_abundance(transfrag, cell, val, true);
+      for (int32_t j = nt.first; j < nt.last; j++) node_used[j] += val;
+    }
+
+    // node_flux: the share of the cell's abundance leaving a node that the
+    // path takes (for store_transcript)
+    for (int32_t i = 1; i < n - 1; i++) {
+      if (total_out[i] > 0) node_flux[i] = node_used[i] / total_out[i];
+      else node_flux[i] = node_used[i - 1] > 0 ? 1 : 0;
+      if (node_flux[i] > 1) node_flux[i] = 1;
+    }
+    return flux;
+  }
+
+  // Pushes a bottleneck flow along path (node ids from source to sink), with a
+  // flow of 1 where the cell has no transfrag, and depletes it as above; used
+  // for guides. Fills node_flux; returns node_flux[1] (0 if no flow).
   float push_flow_and_deplete_transfrags(const FlowContext& context,
                                          std::vector<int32_t>& path,
                                          BitVec& transfrag_on_path,
@@ -254,7 +440,8 @@ namespace ribbon {
   // If the transcript (exons, exon_cov) equals prediction (same intron chain;
   // for one exon, an overlap of at least half), adds its coverage to prediction
   // and returns true; otherwise changes nothing and returns false.
-  bool merge_if_equal_prediction(CPrediction *prediction, std::vector<GSeg>& exons,
+  bool merge_if_equal_prediction(CPrediction *prediction,
+                                 std::vector<GSeg>& exons,
                                  std::vector<float>& exon_cov) {
     // Different exon counts -> not equal
     if (count_of(prediction->exons) != count_of(exons)) return (false);
@@ -303,11 +490,13 @@ namespace ribbon {
   // Turns path (source to sink) into a prediction in predictions: exons are the
   // runs of adjacent nodes, with the flow's coverage, clipped to guide if given.
   // Merges copies from other cells. Returns the coverage stored, or 0.
-  double store_transcript(const FlowContext& context, int32_t prev_prediction_count,
-                          PredictionList& predictions, std::vector<int32_t>& path,
+  double store_transcript(const FlowContext& context,
+                          int32_t prev_prediction_count,
+                          PredictionList& predictions,
+                          std::vector<int32_t>& path,
                           std::vector<float>& node_flux,
                           std::vector<float>& node_coverage,
-                              int32_t& gene_count,
+                          int32_t& gene_count,
                           bool& is_first_transcript, bool& included,
                           BitVec& covered_path_bits, BundleData *bundle,
                           GffObj *guide) {

@@ -7,14 +7,16 @@
 
 namespace ribbon {
   void update_guide_prediction(const FlowContext& context,
-                         PredictionList& predictions,
-                         int32_t p, std::vector<int32_t>& path,
-                         std::vector<float>& node_flux,
-                         std::vector<float>& node_coverage);
+                               PredictionList& predictions,
+                               int32_t p, std::vector<int32_t>& path,
+                               std::vector<float>& node_flux,
+                               std::vector<float>& node_coverage);
 
   float push_guide_flow_and_deplete_transfrags(const FlowContext& context,
-      int32_t g, std::vector<CGuide>& matched_guides, BitVec& transfrag_on_path,
-      std::vector<float>& node_flux);
+                                               int32_t g,
+                                               std::vector<CGuide>& matched_guides,
+                                               BitVec& transfrag_on_path,
+                                               std::vector<float>& node_flux);
 
   float try_alternative_guide_ends(const FlowContext& context, int32_t g,
                                    std::vector<CGuide>& matched_guides,
@@ -39,13 +41,13 @@ namespace ribbon {
                              std::vector<int32_t>& printed_guides);
 
   int32_t assign_flow_to_guides_and_pick_seed(const FlowContext& context,
-                                          std::vector<CGuide>& matched_guides,
-                                          int32_t& gene_count,
+                                              std::vector<CGuide>& matched_guides,
+                                              int32_t& gene_count,
                                               PredictionList& predictions,
-                                          std::vector<float>& node_coverage,
-                                          BitVec& transfrag_on_path,
-                                          BitVec& current_path_bits,
-                                          bool& is_first_transcript,
-                                          std::vector<GffObj *>& guides,
-                                          std::vector<int32_t>& guide_prediction);
+                                              std::vector<float>& node_coverage,
+                                              BitVec& transfrag_on_path,
+                                              BitVec& current_path_bits,
+                                              bool& is_first_transcript,
+                                              std::vector<GffObj *>& guides,
+                                              std::vector<int32_t>& guide_prediction);
 } // namespace ribbon

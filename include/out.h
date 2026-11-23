@@ -10,5 +10,5 @@ namespace ribbon {
   void write_final_output();
 
   int32_t print_results(BundleData *bundle, int32_t gene_count,
-                    const std::string& ref_name);
+                        const std::string& ref_name);
 } // namespace ribbon

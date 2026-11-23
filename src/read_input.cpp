@@ -116,7 +116,10 @@ namespace ribbon {
   // segment at parsed_len lies within junction_support of its start or end;
   // extra_right shifts the end check for deletions.
   static JunctionScanResult advance_and_check_junction_support(CReadAln *rd,
-      int32_t parsed_len, int32_t extra_right, int32_t& i, int32_t& rd_len) {
+                                                               int32_t parsed_len,
+                                                               int32_t extra_right,
+                                                               int32_t& i,
+                                                               int32_t& rd_len) {
     while (i < count_of(rd->segs)
            && rd_len + (int32_t)rd->segs[i].len() < parsed_len) {
       rd_len += rd->segs[i].len();
@@ -239,7 +242,7 @@ namespace ribbon {
                             GSamRecord& brec,
                             std::unordered_map<std::string, int32_t>& hash_read,
                             int32_t curr_start, int32_t read_start, int32_t nh,
-                                int32_t hi,
+                            int32_t hi,
                             float read_count) {
     // Only consider mate pairing data if mates are on the same
     // chromosome/contig and are properly paired

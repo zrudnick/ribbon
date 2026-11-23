@@ -164,7 +164,7 @@ namespace ribbon {
   // is marked as merge and not counted.
   int32_t count_nodes_after_pruning(std::vector<CGNode>& node_state,
                                     int32_t node_count,
-                                GraphNodeList& nodes) {
+                                    GraphNodeList& nodes) {
     // First include source and first node_state because this is always kept
     int32_t kept_node_count = 1;
 
@@ -265,10 +265,10 @@ namespace ribbon {
 
   // Marks the nodes that will be linked to the source or sink (in node_state)
   // and adds those links as candidates for removal.
-  void add_source_sink_links_as_prunable(
-      GraphNodeList& nodes, PendingTransfragList& pending_transfrags,
-      std::vector<CGNode>& node_state,
-      std::vector<CGJunc>& prunable_junctions) {
+  void add_source_sink_links_as_prunable(GraphNodeList& nodes,
+                                         PendingTransfragList& pending_transfrags,
+                                         std::vector<CGNode>& node_state,
+                                         std::vector<CGJunc>& prunable_junctions) {
     for (int32_t entry_idx = 0; entry_idx < count_of(pending_transfrags);
          entry_idx++) {
       int32_t to_node = int32_t(pending_transfrags[entry_idx].to);

@@ -415,9 +415,11 @@ namespace ribbon {
   // pieces are not linked to each other: the left one also ends at the sink and
   // the right one also starts at the source. Returns the rightmost piece.
   CGraphnode *trim_node_at_all_points(const GraphBuildContext& context,
-      uint32_t new_end, CGraphnode *graph_node,
-      PendingTransfragList& pending_transfrags, int32_t& node_count,
-      PreGraphSegment *pre_graph_segment, int32_t& edge_count) {
+                                      uint32_t new_end, CGraphnode *graph_node,
+                                      PendingTransfragList& pending_transfrags,
+                                      int32_t& node_count,
+                                      PreGraphSegment *pre_graph_segment,
+                                      int32_t& edge_count) {
     // Find the trim points of the node.
     std::vector<CTrimPoint> trim_point;
     find_all_trim_points(context.ref_start, context.strand,

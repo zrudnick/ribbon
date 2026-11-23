@@ -95,23 +95,32 @@ namespace ribbon {
                              PreGraphSegment *pre_graph_segment);
 
   CGraphnode *link_source_to_guide_start(const GraphBuildContext& context,
-      uint32_t new_start, uint32_t new_end, CGraphnode *graph_node,
-      PendingTransfragList& pending_transfrags, int32_t& node_count,
-      PreGraphSegment *pre_graph_segment, int32_t& edge_count);
+                                         uint32_t new_start,
+                                         uint32_t new_end,
+                                         CGraphnode *graph_node,
+                                         PendingTransfragList& pending_transfrags,
+                                         int32_t& node_count,
+                                         PreGraphSegment *pre_graph_segment,
+                                         int32_t& edge_count);
 
   CGraphnode *link_guide_end_to_sink(const GraphBuildContext& context,
-      uint32_t new_start, uint32_t new_end, CGraphnode *graph_node,
-      PendingTransfragList& pending_transfrags, int32_t& node_count,
-      PreGraphSegment *pre_graph_segment, int32_t& edge_count);
+                                     uint32_t new_start,
+                                     uint32_t new_end,
+                                     CGraphnode *graph_node,
+                                     PendingTransfragList& pending_transfrags,
+                                     int32_t& node_count,
+                                     PreGraphSegment *pre_graph_segment,
+                                     int32_t& edge_count);
 
-  BitVec build_reachable_bits_depth_first(
-      const GraphBuildContext& context,
-      CGraphnode *node, BitVec parents,
-      int32_t node_count,
-      std::vector<bool>& visited,
-      int32_t& edge_count);
+  BitVec build_reachable_bits_depth_first(const GraphBuildContext& context,
+                                          CGraphnode *node, BitVec parents,
+                                          int32_t node_count,
+                                          std::vector<bool>& visited,
+                                          int32_t& edge_count);
 
   int32_t build_splice_graph(BundleData *bundle, AssemblyState& state,
-                         GraphTables& tables, char strand, int32_t graph_idx,
-                         std::vector<GuideBoundary>& guide_boundaries);
+                             GraphTables& tables,
+                             char strand,
+                             int32_t graph_idx,
+                             std::vector<GuideBoundary>& guide_boundaries);
 } // namespace ribbon

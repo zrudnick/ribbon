@@ -15,12 +15,11 @@ extern float min_read_coverage;
 // Extracts transcripts from a bundle's splice graph (splice_graph.cpp) and its
 // transfrags (transfrag.cpp). A transfrag is a read-supported path (nodes,
 // path_bits, abundance pooled and per cell); a path is a source-to-sink node
-// list that becomes a transcript; pushing flow along a path subtracts
-// ("depletes") what it carries from the transfrags that support it. For each
-// path node, the in/out abundance is that of the transfrags entering from the
-// left or leaving to the right (path_* count only path-compatible ones,
-// total_* all of them). low_cov_flags marks the nodes and edges to avoid
-// because their pooled coverage is negligible
+// list that becomes a transcript. For each path we solve a max flow
+// (Edmonds-Karp, as in StringTie 1) on a small network of the cell's
+// transfrags compatible with it, and subtract ("deplete") that flow from them
+// (max_flow_and_deplete_transfrags). low_cov_flags marks the nodes and edges
+// to avoid because their pooled coverage is negligible
 // (mark_low_coverage_nodes_and_edges). find_transcripts is the entry point,
 // called once per cell and graph: guides claim their evidence first
 // (assign_flow_to_guides), then extract_transcripts_greedily repeatedly builds
@@ -102,7 +101,7 @@ namespace ribbon {
   }
 
   // Extracts transcripts greedily in one cell (recursive): builds a path
-  // through seed_node, pushes flow along it and stores it if it carries enough
+  // through seed_node, computes its max flow and stores it if it carries enough
   // flow, then repeats from the node with the most coverage left.
   void extract_transcripts_greedily(const FlowContext& context,
                                     int32_t seed_node,
@@ -132,7 +131,7 @@ namespace ribbon {
     // not compute flow
     bool path_empty = true;
     // Set if the path took a weakly supported junction from other cells' reads
-    // (see check_weak_borrow); its flow is still pushed, but it is not stored
+    // (see check_weak_borrow); its flow is still depleted, but it is not stored
     bool weak_borrow = false;
     // The same if the reads contradict two of its choices (is_path_contradicted)
     bool contradicted = false;
@@ -147,16 +146,17 @@ namespace ribbon {
 
       // V6
       if (extend_path(context, seed_node, false, path, current_path_bits,
-                              node_coverage, path_empty, weak_borrow,
-                              low_cov_flags)) {
+        node_coverage, path_empty, weak_borrow, low_cov_flags)) {
         if (drop_contradicted_paths && !context.credit_pass)
           contradicted = is_path_contradicted(context, path, seed_node);
         // If we found at least one non-empty node on the path, we compute the
         // flow
-        if (!path_empty)
-          flux = push_flow_and_deplete_transfrags(context, path,
-                                                  transfrag_on_path, node_flux,
-                                                  current_path_bits);
+        if (!path_empty) {
+          flux = max_flow_and_deplete_transfrags(context, path,
+            transfrag_on_path, node_flux, current_path_bits);
+        }
+          
+
       }
     }
 
@@ -240,12 +240,12 @@ namespace ribbon {
   // as if there were no guides, and returns the transcripts it finds. The
   // cell's transfrag abundances are restored afterwards, so the guides still
   // see all the evidence.
-  PredictionList extract_cell_denovo_predictions(const FlowContext& context, 
-                                                int32_t seed_node, 
-                                                int32_t gene_count,
-                                                std::vector<float> node_coverage, 
-                                                BitVec current_path_bits, 
-                                                BitVec& low_cov_flags) {
+  PredictionList extract_cell_denovo_predictions(const FlowContext& context,
+                                                 int32_t seed_node,
+                                                 int32_t gene_count,
+                                                 std::vector<float> node_coverage,
+                                                 BitVec current_path_bits,
+                                                 BitVec& low_cov_flags) {
     // Save the cell's abundances. The links that guides made to the source and
     // sink are no evidence of this cell: we count them as pooled evidence
     // only, so that they do not end a path where this cell's reads go on.
@@ -259,6 +259,10 @@ namespace ribbon {
     // Mark the pass, so that contradicted paths are still found here
     FlowContext credit_context = context;
     credit_context.credit_pass = true;
+
+    // The node rates without those links
+    std::vector<float> node_rate = compute_cell_node_rates(credit_context);
+    credit_context.node_rate = &node_rate;
 
     PredictionList denovo_predictions;
     if (node_coverage[seed_node] >= 1
@@ -299,11 +303,12 @@ namespace ribbon {
   // extract_cell_denovo_predictions finds its intron chain. Call it right after
   // the guides have claimed their flow. The coverage the flow gave the cell is
   // kept in flow_cov, for guides that no cell ends up with.
-  void credit_guides_found_by_denovo(
-      const FlowContext& context, const std::vector<CGuide>& matched_guides,
-      std::vector<GffObj *>& guides, const PredictionList& predictions,
-      const std::vector<int32_t>& guide_prediction,
-      const PredictionList& denovo_predictions) {
+  void credit_guides_found_by_denovo(const FlowContext& context,
+                                     const std::vector<CGuide>& matched_guides,
+                                     std::vector<GffObj *>& guides,
+                                     const PredictionList& predictions,
+                                     const std::vector<int32_t>& guide_prediction,
+                                     const PredictionList& denovo_predictions) {
     for (const CGuide& matched_guide : matched_guides) {
       int32_t p = guide_prediction[matched_guide.g];
       if (p < 0) continue;
@@ -478,8 +483,7 @@ namespace ribbon {
   // transfrags of the pooled graph, and its abundances only go down from here
   // (the copy run of the de novo extraction restores them to what they are
   // now), so the list holds every transfrag that can have abundance later.
-  std::vector<std::vector<int32_t>> list_cell_transfrags(
-      const FlowContext& context) {
+  std::vector<std::vector<int32_t>> list_cell_transfrags(const FlowContext& context) {
     std::vector<std::vector<int32_t>> cell_transfrags(context.graph.node_count);
     for (int32_t i = 0; i < context.graph.node_count; i++)
       for (int32_t t : context.graph.nodes[i]->transfrag_ids)
@@ -541,10 +545,9 @@ namespace ribbon {
   // length), and which paths each of the cell's read transfrags fits (before
   // the flow). The re-split itself runs after the filters, among the reported
   // transcripts (resplit_quant_coverage in predictions.cpp).
-  void save_quant_paths(
-      const FlowContext& context,
-      const std::vector<std::vector<float>>& original_cell_abundance,
-      int32_t first_prediction, double fragment_len) {
+  void save_quant_paths(const FlowContext& context,
+                        const std::vector<std::vector<float>>& original_cell_abundance,
+                        int32_t first_prediction, double fragment_len) {
     PredictionList& predictions = context.bundle->predictions;
     int32_t prediction_count = count_of(predictions);
     int32_t sink = context.graph.node_count - 1;
@@ -626,10 +629,10 @@ namespace ribbon {
   // True if the cell has a read transfrag (no source or sink link, none made
   // by guides) with abundance on any real node of path, from the abundances
   // before the flow (original_cell_abundance).
-  bool has_cell_transfrag_on_path_nodes(
-      const FlowContext& context, const std::vector<int32_t>& path,
-      const std::vector<std::vector<float>>& original_cell_abundance,
-      int32_t cell) {
+  bool has_cell_transfrag_on_path_nodes(const FlowContext& context,
+                                        const std::vector<int32_t>& path,
+                                        const std::vector<std::vector<float>>& original_cell_abundance,
+                                        int32_t cell) {
     int32_t sink = context.graph.node_count - 1;
     for (int32_t node : path) {
       if (node == 0 || node == sink) continue;
@@ -652,10 +655,9 @@ namespace ribbon {
   // the cell does not have), or when no transfrag of the cell fits the path
   // although some lie on its nodes. Uses the cell abundances from before the flow
   // (original_cell_abundance) and the paths of all cells and guides.
-  void drop_shadowed_paths(
-      const FlowContext& context,
-      const std::vector<std::vector<float>>& original_cell_abundance,
-      int32_t first_prediction) {
+  void drop_shadowed_paths(const FlowContext& context,
+                           const std::vector<std::vector<float>>& original_cell_abundance,
+                           int32_t first_prediction) {
     PredictionList& predictions = context.bundle->predictions;
     int32_t prediction_count = count_of(predictions);
     int32_t sink = context.graph.node_count - 1;
@@ -798,11 +800,11 @@ namespace ribbon {
   }
 
   int32_t find_transcripts(const FlowContext& shared_context,
-                       int32_t gene_count,
-                       std::vector<CGuide>& matched_guides,
-                       std::vector<GffObj *>& guides,
-                       std::vector<int32_t>& guide_prediction,
-                       BitVec& low_cov_flags) {
+                           int32_t gene_count,
+                           std::vector<CGuide>& matched_guides,
+                           std::vector<GffObj *>& guides,
+                           std::vector<int32_t>& guide_prediction,
+                           BitVec& low_cov_flags) {
     // Graph and cell data shared through the context, with the transfrags of
     // this cell once we know them.
     FlowContext context = shared_context;
@@ -826,6 +828,9 @@ namespace ribbon {
     std::vector<std::vector<int32_t>> cell_transfrags
         = list_cell_transfrags(context);
     context.cell_transfrags = &cell_transfrags;
+
+    std::vector<float> node_rate = compute_cell_node_rates(context);
+    context.node_rate = &node_rate;
 
     // Set up the path bookkeeping; the guides claim their evidence first.
     BitVec transfrag_on_path(count_of(context.graph.transfrag));

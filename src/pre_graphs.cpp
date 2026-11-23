@@ -13,7 +13,7 @@ namespace ribbon {
   // it to `pre_graph_list`/`pre_graph_segments`, and returns the new pre-graph's
   // index.
   int32_t start_new_pre_graph(PreGraphList& pre_graph_list, CGroup *group,
-                            PreGraphSegmentList& pre_graph_segments) {
+                              PreGraphSegmentList& pre_graph_segments) {
     int32_t node_id = count_of(pre_graph_segments);
     int32_t pre_graph_idx = count_of(pre_graph_list);
     pre_graph_segments.push_back(std::make_unique<PreGraphSegment>(
@@ -29,8 +29,8 @@ namespace ribbon {
   // PreGraphSegment, otherwise it extends that segment. Updates the length,
   // coverage and multi-hit totals of the pre-graph.
   void add_group_to_pre_graph(CGroup *group, PreGraph *pre_graph,
-                            PreGraphSegmentList& pre_graph_segments,
-                            uint32_t merge_distance) {
+                              PreGraphSegmentList& pre_graph_segments,
+                              uint32_t merge_distance) {
     PreGraphSegment *last_node
         = pre_graph_segments[pre_graph->last_node_id].get();
     int32_t new_node_id = count_of(pre_graph_segments);

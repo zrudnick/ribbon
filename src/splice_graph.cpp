@@ -30,9 +30,13 @@ namespace ribbon {
   // the new downstream node directly from source, using the coverage jump
   // around new_start to estimate the new source->guide transfrag's abundance.
   CGraphnode *link_source_to_guide_start(const GraphBuildContext& context,
-      uint32_t new_start, uint32_t new_end, CGraphnode *graph_node,
-      PendingTransfragList& pending_transfrags, int32_t& node_count,
-      PreGraphSegment *pre_graph_segment, int32_t& edge_count) {
+                                         uint32_t new_start,
+                                         uint32_t new_end,
+                                         CGraphnode *graph_node,
+                                         PendingTransfragList& pending_transfrags,
+                                         int32_t& node_count,
+                                         PreGraphSegment *pre_graph_segment,
+                                         int32_t& edge_count) {
     // The new_start is very close to graph_node start
     if (graph_node->start + long_intron_anchor > new_start) {
       for (int32_t p = 0; p < count_of(graph_node->parent); p++)
@@ -108,9 +112,13 @@ namespace ribbon {
   // upstream part directly to sink, using the coverage drop around new_start to
   // estimate the new guide->sink transfrag's abundance.
   CGraphnode *link_guide_end_to_sink(const GraphBuildContext& context,
-      uint32_t new_start, uint32_t new_end, CGraphnode *graph_node,
-      PendingTransfragList& pending_transfrags, int32_t& node_count,
-      PreGraphSegment *pre_graph_segment, int32_t& edge_count) {
+                                     uint32_t new_start,
+                                     uint32_t new_end,
+                                     CGraphnode *graph_node,
+                                     PendingTransfragList& pending_transfrags,
+                                     int32_t& node_count,
+                                     PreGraphSegment *pre_graph_segment,
+                                     int32_t& edge_count) {
     // Estimate the abundance of the sink link from the coverage drop at
     // new_start.
     double coverage_left = 0;
@@ -183,12 +191,11 @@ namespace ribbon {
   // ancestors (parents) and collecting child_reachable_bits and
   // parent_reachable_bits on every visited node; adds source/sink transfrags
   // where needed. Returns reachable edges.
-  BitVec build_reachable_bits_depth_first(
-      const GraphBuildContext& context,
-      CGraphnode *node, BitVec parents,
-      int32_t node_count,
-      std::vector<bool>& visited,
-      int32_t& edge_count) {
+  BitVec build_reachable_bits_depth_first(const GraphBuildContext& context,
+                                          CGraphnode *node, BitVec parents,
+                                          int32_t node_count,
+                                          std::vector<bool>& visited,
+                                          int32_t& edge_count) {
     PathBitLayout& layout = context.graph->path_bit_layout;
     TransfragList& transfrag = context.graph->transfrag;
     // This graph's nodes, indexed by node id
@@ -297,13 +304,17 @@ namespace ribbon {
   // before limit, advancing guide_boundary_idx past them. A guide start links
   // its part of the node to the source, a guide end links the part before it
   // to the sink. Returns the last node.
-  CGraphnode *split_node_at_guide_boundaries(
-      const GraphBuildContext& context,
-      std::vector<GuideBoundary>& guide_boundaries,
-      int32_t& guide_boundary_idx, uint32_t limit, uint32_t curr_start,
-      uint32_t pre_graph_segment_end, CGraphnode *graph_node,
-      PendingTransfragList& pending_transfrags, int32_t& node_count,
-      PreGraphSegment *pre_graph_segment, int32_t& edge_count) {
+  CGraphnode *split_node_at_guide_boundaries(const GraphBuildContext& context,
+                                             std::vector<GuideBoundary>& guide_boundaries,
+                                             int32_t& guide_boundary_idx,
+                                             uint32_t limit,
+                                             uint32_t curr_start,
+                                             uint32_t pre_graph_segment_end,
+                                             CGraphnode *graph_node,
+                                             PendingTransfragList& pending_transfrags,
+                                             int32_t& node_count,
+                                             PreGraphSegment *pre_graph_segment,
+                                             int32_t& edge_count) {
     int32_t boundary_count = count_of(guide_boundaries);
 
     // Skip the boundaries that are not after the start of the node.
@@ -360,9 +371,10 @@ namespace ribbon {
   // sharply compared to the nodes around them, and counts the edges of the
   // nodes without children (build_reachable_bits_depth_first links those to
   // the sink).
-  void link_weak_nodes_to_source_and_sink(
-      const GraphBuildContext& context, int32_t node_count,
-      int32_t& edge_count, PendingTransfragList& pending_transfrags) {
+  void link_weak_nodes_to_source_and_sink(const GraphBuildContext& context,
+                                          int32_t node_count,
+                                          int32_t& edge_count,
+                                          PendingTransfragList& pending_transfrags) {
     char strand = context.strand;
     int32_t ref_start = context.ref_start;
     BpCoverage& bp_coverage = *context.bp_coverage;
@@ -878,8 +890,10 @@ namespace ribbon {
   // left to right, makes a node per stretch between junctions, splits them at
   // guide ends and trim points, prunes the graph and builds its path_bits.
   int32_t build_splice_graph(BundleData *bundle, AssemblyState& state,
-                         GraphTables& tables, char strand, int32_t graph_idx,
-                         std::vector<GuideBoundary>& guide_boundaries) {
+                             GraphTables& tables,
+                             char strand,
+                             int32_t graph_idx,
+                             std::vector<GuideBoundary>& guide_boundaries) {
     SpliceGraphBuilder builder(bundle, state, tables, strand, graph_idx,
                                guide_boundaries);
     return builder.build();

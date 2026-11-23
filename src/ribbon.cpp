@@ -238,9 +238,9 @@ namespace ribbon {
   // reaches past it, until no more guides overlap. Updates last_guide_idx.
   static void add_guides_to_extended_bundle(GList<GffObj> *guides,
                                             int32_t num_guides,
-                                                int32_t curr_start,
+                                            int32_t curr_start,
                                             int32_t& curr_end,
-                                                int32_t& last_guide_idx,
+                                            int32_t& last_guide_idx,
                                             BundleData *bundle) {
     bool bundle_end_extended = true;
     while (bundle_end_extended) {

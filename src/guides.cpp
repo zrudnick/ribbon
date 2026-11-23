@@ -36,10 +36,9 @@ namespace ribbon {
   // whose introns are all covered by reads (marking it GBST_ALL_INTR_COV) and
   // gives guide_prediction (the prediction index of each guide) one slot per
   // guide (-1 until find_transcripts sets it).
-  void compute_guide_boundaries(
-      std::vector<GffObj *>& guides,
-          std::vector<GuideBoundary>& guide_boundaries,
-      std::vector<int32_t>& guide_prediction) {
+  void compute_guide_boundaries(std::vector<GffObj *>& guides,
+                                std::vector<GuideBoundary>& guide_boundaries,
+                                std::vector<int32_t>& guide_prediction) {
     // Adds a guide boundary to guide_boundaries. If one with the same position
     // and strand exists, keeps the narrower exon (smaller exon_other_end for a
     // start, larger for an end).
@@ -89,9 +88,11 @@ namespace ribbon {
   // are on the strand (or unstranded) and are supported by reads. Each of them
   // may add a source and a sink edge to the graph. The guides must be sorted by
   // start.
-  int32_t count_guides_overlapping_pre_graph(
-      std::vector<GffObj *>& guides, char strand_char, uint32_t pre_graph_start,
-      uint32_t pre_graph_end, int32_t& guide_cursor) {
+  int32_t count_guides_overlapping_pre_graph(std::vector<GffObj *>& guides,
+                                             char strand_char,
+                                             uint32_t pre_graph_start,
+                                             uint32_t pre_graph_end,
+                                             int32_t& guide_cursor) {
     int32_t guide_total = count_of(guides);
     while (guide_cursor < guide_total
            && guides[guide_cursor]->end < pre_graph_start) guide_cursor++;
@@ -112,8 +113,9 @@ namespace ribbon {
   // Follows the guide's exons through the splice graph. Returns a transfrag
   // with the guide's exact path, or an empty pointer if the graph lacks a node
   // or an edge for part of it.
-  std::shared_ptr<CTransfrag> match_guide_to_graph(
-      GffObj *guide, SpliceGraph& graph, int32_t cell_count) {
+  std::shared_ptr<CTransfrag> match_guide_to_graph(GffObj *guide,
+                                                   SpliceGraph& graph,
+                                                   int32_t cell_count) {
     std::shared_ptr<CTransfrag> guide_transfrag;
 
     // Find the node where the guide starts: the last node of the contiguous,

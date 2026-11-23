@@ -29,21 +29,30 @@ namespace ribbon {
                           std::vector<CGuide>& matched_guides,
                           BundleData *bundle);
 
-  void get_read_graph_nodes(
-      char strand, float read_coverage, std::vector<int32_t>& read_graph_idxs,
-      float strand_prop, std::vector<std::vector<int32_t>>& read_nodes,
-      ReadList& reads, int32_t read_idx,
-      std::vector<std::vector<int32_t>>& read_group,
-      std::vector<int32_t>& merge_map,
-      PerStrand<std::vector<int32_t>>& group_to_pre_graph_segment,
-      PerStrand<SegmentNodesList>& segment_nodes,
-      PerStrand<std::vector<SpliceGraph>>& splice_graphs);
+  void get_read_graph_nodes(char strand,
+                            float read_coverage,
+                            std::vector<int32_t>& read_graph_idxs,
+                            float strand_prop,
+                            std::vector<std::vector<int32_t>>& read_nodes,
+                            ReadList& reads, int32_t read_idx,
+                            std::vector<std::vector<int32_t>>& read_group,
+                            std::vector<int32_t>& merge_map,
+                            PerStrand<std::vector<int32_t>>& group_to_pre_graph_segment,
+                            PerStrand<SegmentNodesList>& segment_nodes,
+                            PerStrand<std::vector<SpliceGraph>>& splice_graphs);
 
-  CTransfrag *add_read_abundance_to_transfrag(
-      SpliceGraph& graph, std::vector<int32_t>& nodes, BitVec& path_bits,
-      float abundance, float raw_scale, uint32_t read_start, uint32_t read_end,
-      int32_t cell_count, int32_t cell, uint32_t gap_start, uint32_t gap_end,
-      double *placed_bases = nullptr);
+  CTransfrag *add_read_abundance_to_transfrag(SpliceGraph& graph,
+                                              std::vector<int32_t>& nodes,
+                                              BitVec& path_bits,
+                                              float abundance,
+                                              float raw_scale,
+                                              uint32_t read_start,
+                                              uint32_t read_end,
+                                              int32_t cell_count,
+                                              int32_t cell,
+                                              uint32_t gap_start,
+                                              uint32_t gap_end,
+                                              double *placed_bases = nullptr);
 
   void assign_fragment_to_transfrags(BundleData *bundle,
                                      AssemblyState& state, GraphTables& tables,

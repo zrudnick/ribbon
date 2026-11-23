@@ -146,7 +146,7 @@ namespace ribbon {
   }
 
   void PathExtender::report_missing_edge(int32_t toward, int32_t source_code,
-                           int32_t sink_code) {
+                                         int32_t sink_code) {
     fprintf(stderr, "%d Found parent-child %d-%d not linked by edge\n",
             toward_source ? source_code : sink_code,
             toward_source ? toward : i, toward_source ? i : toward);
@@ -168,8 +168,9 @@ namespace ribbon {
   // pooled_support. A caller that needs only one of them says so, and the
   // transfrags of the other kind are not checked.
   void PathExtender::add_transfrag_support(int32_t neighbor, float& support,
-                             float& pooled_support, bool want_support,
-                             bool want_pooled_support) {
+                                           float& pooled_support,
+                                           bool want_support,
+                                           bool want_pooled_support) {
     CGraphnode *neighbor_node = context.graph.nodes[neighbor].get();
     // The pooled support comes from the transfrags that the cell lacks
     const std::vector<int32_t>& node_transfrags = want_pooled_support
@@ -221,9 +222,9 @@ namespace ribbon {
   // if the cell sees it too (or has no reads on the current node): in the
   // pool, a longer isoform that one cell type makes looks like a drop.
   bool PathExtender::is_excluded_adjacent_neighbor(int32_t neighbor,
-                                     CGraphnode *current_node,
-                                     CGraphnode *neighbor_node,
-                                     bool adjacent_to_neighbor) {
+                                                   CGraphnode *current_node,
+                                                   CGraphnode *neighbor_node,
+                                                   bool adjacent_to_neighbor) {
     bool pooled_drop = neighbor_node->cov / neighbor_node->len() < 1000
         && current_node->cov * DROP * neighbor_node->len()
         > neighbor_node->cov * current_node->len();
@@ -244,7 +245,7 @@ namespace ribbon {
   // cross between it and i. The pooled support is only used when no neighbor
   // has support in this cell, so it is computed after this loop.
   void PathExtender::score_neighbors_by_cell_support(CGraphnode *current_node,
-                                       std::vector<int32_t>& neighbors) {
+                                                     std::vector<int32_t>& neighbors) {
     for (int32_t n = 0; n < count_of(neighbors); n++) {
       int32_t neighbor = neighbors[n];
       CGraphnode *neighbor_node = context.graph.nodes[neighbor].get();

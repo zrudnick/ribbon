@@ -57,8 +57,8 @@ namespace ribbon {
   // Reads per-cell values of a transcript from its first line: the
   // `name "cell:value"` attributes (cell coverages by default), in the order
   // they are printed.
-  std::vector<std::pair<std::string, double>> parse_cell_values(
-      const std::string& transcript_line, const std::string& name = "cell") {
+  std::vector<std::pair<std::string, double>> parse_cell_values(const std::string& transcript_line,
+                                                                const std::string& name = "cell") {
     std::vector<std::pair<std::string, double>> cells;
     const std::string attribute = " " + name + " \"";
     size_t pos = 0;
@@ -443,9 +443,9 @@ namespace ribbon {
   // Numbers the genes: all predictions of a gene get the same gene number.
   // Returns the gene number of each prediction (-1 for the unflagged ones) and
   // adds an entry to transcripts_per_gene for every gene.
-  std::vector<int32_t> assign_gene_numbers(
-      PredictionList& predictions, std::vector<int32_t>& gene_parent,
-      std::vector<int32_t>& transcripts_per_gene) {
+  std::vector<int32_t> assign_gene_numbers(PredictionList& predictions,
+                                           std::vector<int32_t>& gene_parent,
+                                           std::vector<int32_t>& transcripts_per_gene) {
     int32_t prediction_count = count_of(predictions);
     std::vector<int32_t> gene_of_prediction(prediction_count, -1);
     for (int32_t p = 0; p < prediction_count; p++)
@@ -636,7 +636,7 @@ namespace ribbon {
   // Prints the predictions of one bundle that finalize_predictions kept:
   // groups them into genes and writes them. Returns the updated gene count.
   int32_t print_results(BundleData *bundle, int32_t gene_count,
-                    const std::string& ref_name) {
+                        const std::string& ref_name) {
     // Get the predictions of this bundle (sorted by position) and the cells'
     // names, indexed by cell number (cells are numbered in the order they were
     // first seen).

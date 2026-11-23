@@ -30,7 +30,9 @@ namespace ribbon {
                             std::vector<CTrimPoint>& trim_point);
 
   CGraphnode *trim_node_at_all_points(const GraphBuildContext& context,
-      uint32_t new_end, CGraphnode *graph_node,
-      PendingTransfragList& pending_transfrags, int32_t& node_count,
-      PreGraphSegment *pre_graph_segment, int32_t& edge_count);
+                                      uint32_t new_end, CGraphnode *graph_node,
+                                      PendingTransfragList& pending_transfrags,
+                                      int32_t& node_count,
+                                      PreGraphSegment *pre_graph_segment,
+                                      int32_t& edge_count);
 } // namespace ribbon

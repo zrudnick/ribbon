@@ -50,7 +50,7 @@ namespace ribbon {
   // points and every piece above min_transcript_len is a prediction. Returns
   // the gene count.
   int32_t predict_unstranded_pre_graphs(BundleData *bundle,
-                                 AssemblyState& state) {
+                                        AssemblyState& state) {
     int32_t ref_start = bundle->start;
     std::vector<GffObj *>& guides = bundle->guides;
     BpCoverage& bp_coverage = bundle->bp_coverage;
@@ -139,7 +139,7 @@ namespace ribbon {
   // few enough multi-hit reads, or if it overlaps a supported guide (there
   // might be small transfrags from source to sink worth keeping).
   static bool is_pre_graph_worth_processing(const PreGraph& pre_graph,
-                                          int32_t overlapping_guides) {
+                                            int32_t overlapping_guides) {
     if (!pre_graph.cov) return false;
     bool has_few_multi_reads
         = (pre_graph.multi / pre_graph.cov) <= multi_read_frac;
@@ -149,9 +149,11 @@ namespace ribbon {
 
   // Builds the splice graph and the transfrag index of each pre-graph of one
   // strand ('-' or '+') that is worth processing.
-  static void get_stranded_splice_graphs(
-      BundleData *bundle, AssemblyState& state, GraphTables& tables,
-      std::vector<GuideBoundary>& guide_boundaries, char strand) {
+  static void get_stranded_splice_graphs(BundleData *bundle,
+                                         AssemblyState& state,
+                                         GraphTables& tables,
+                                         std::vector<GuideBoundary>& guide_boundaries,
+                                         char strand) {
     std::vector<GffObj *>& guides = bundle->guides;
     PreGraphList& pre_graphs = state.pre_graph_list[strand];
     PreGraphSegmentList& segments = state.pre_graph_segment_list[strand];
@@ -193,8 +195,8 @@ namespace ribbon {
   // Builds the splice graph and the transfrag index of each stranded pre-graph
   // that is worth processing. The graphs are left in tables.
   void get_splice_graphs(BundleData *bundle, AssemblyState& state,
-                    GraphTables& tables,
-                    std::vector<GuideBoundary>& guide_boundaries) {
+                         GraphTables& tables,
+                         std::vector<GuideBoundary>& guide_boundaries) {
     for (char strand : {'-', '+'}) {
       get_stranded_splice_graphs(bundle, state, tables, guide_boundaries,
           strand);
@@ -254,7 +256,7 @@ namespace ribbon {
   // gene_count.
   int32_t extract_transcripts_from_graphs(BundleData *bundle,
                                           GraphTables& tables,
-                                          std::vector<int32_t>& guide_prediction, 
+                                          std::vector<int32_t>& guide_prediction,
                                           int32_t gene_count) {
     std::vector<GffObj *>& guides = bundle->guides;
     int32_t cell_count = count_of(bundle->cell_name);

@@ -29,10 +29,10 @@ namespace ribbon {
   // that overlap it, and removes it from node_coverage. The cell is credited
   // with what it added.
   void update_guide_prediction(const FlowContext& context,
-                         PredictionList& predictions,
-                         int32_t p, std::vector<int32_t>& path,
-                         std::vector<float>& node_flux,
-                         std::vector<float>& node_coverage) {
+                               PredictionList& predictions,
+                               int32_t p, std::vector<int32_t>& path,
+                               std::vector<float>& node_flux,
+                               std::vector<float>& node_coverage) {
     // Graph and cell data shared through the context.
 
     int32_t exon_idx = 0;
@@ -109,8 +109,10 @@ namespace ribbon {
   // transfrag shared by several overlapping guides is split between them in
   // proportion to their abundance, so that no guide claims another's evidence.
   float push_guide_flow_and_deplete_transfrags(const FlowContext& context,
-      int32_t g, std::vector<CGuide>& matched_guides, BitVec& transfrag_on_path,
-      std::vector<float>& node_flux) {
+                                               int32_t g,
+                                               std::vector<CGuide>& matched_guides,
+                                               BitVec& transfrag_on_path,
+                                               std::vector<float>& node_flux) {
     // Graph and cell data shared through the context.
 
     // Positions of the guide's nodes and the entering/leaving abundances.
@@ -558,13 +560,17 @@ namespace ribbon {
   // Stores the prediction of matched_guides[g] if its guide has none yet (and
   // notes the guide as printed if it has several exons), otherwise updates the
   // prediction of the guide with the flow that was just pushed.
-  void store_or_update_guide_prediction(
-      const FlowContext& context, int32_t g,
-      std::vector<CGuide>& matched_guides, std::vector<float>& node_flux,
-      std::vector<float>& node_coverage, int32_t& gene_count,
-      PredictionList& predictions, BitVec& current_path_bits,
-      bool& is_first_transcript, std::vector<GffObj *>& guides, std::vector<int32_t>& guide_prediction,
-      std::vector<int32_t>& printed_guides) {
+  void store_or_update_guide_prediction(const FlowContext& context, int32_t g,
+                                        std::vector<CGuide>& matched_guides,
+                                        std::vector<float>& node_flux,
+                                        std::vector<float>& node_coverage,
+                                        int32_t& gene_count,
+                                        PredictionList& predictions,
+                                        BitVec& current_path_bits,
+                                        bool& is_first_transcript,
+                                        std::vector<GffObj *>& guides,
+                                        std::vector<int32_t>& guide_prediction,
+                                        std::vector<int32_t>& printed_guides) {
     CGuide& matched_guide = matched_guides[g];
     GffObj *guide = guides[matched_guide.g];
     if (guide_prediction[matched_guide.g] == -1) {
@@ -709,12 +715,16 @@ namespace ribbon {
 
   // Runs assign_flow_to_guides, then returns the node with the highest
   // remaining coverage, which is where the greedy extraction continues.
-  int32_t assign_flow_to_guides_and_pick_seed(
-      const FlowContext& context, std::vector<CGuide>& matched_guides,
-      int32_t& gene_count, PredictionList& predictions,
-      std::vector<float>& node_coverage, BitVec& transfrag_on_path,
-      BitVec& current_path_bits, bool& is_first_transcript,
-      std::vector<GffObj *>& guides, std::vector<int32_t>& guide_prediction) {
+  int32_t assign_flow_to_guides_and_pick_seed(const FlowContext& context,
+                                              std::vector<CGuide>& matched_guides,
+                                              int32_t& gene_count,
+                                              PredictionList& predictions,
+                                              std::vector<float>& node_coverage,
+                                              BitVec& transfrag_on_path,
+                                              BitVec& current_path_bits,
+                                              bool& is_first_transcript,
+                                              std::vector<GffObj *>& guides,
+                                              std::vector<int32_t>& guide_prediction) {
     // Graph and cell data shared through the context.
 
     // Remembers the multi-exons matched_guides's that were printed here

@@ -152,7 +152,7 @@ namespace ribbon {
   static void redirect_to_better_junction(std::vector<CJunction *>& junctions,
                                           int32_t i, bool end_side,
                                           uint32_t search_window,
-                                              float tolerance,
+                                          float tolerance,
                                           int32_t ref_start,
                                           BpCoverage& bp_coverage) {
     CJunction *junc = junctions[i];

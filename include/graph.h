@@ -164,11 +164,11 @@ namespace ribbon {
   };
 
   int32_t predict_unstranded_pre_graphs(BundleData *bundle,
-      AssemblyState& state);
+                                        AssemblyState& state);
 
   void get_splice_graphs(BundleData *bundle, AssemblyState& state,
-                    GraphTables& tables,
-                    std::vector<GuideBoundary>& guide_boundaries);
+                         GraphTables& tables,
+                         std::vector<GuideBoundary>& guide_boundaries);
 
   void free_pre_graphs(AssemblyState& state);
 
@@ -177,8 +177,9 @@ namespace ribbon {
 
   void free_read_groups(AssemblyState& state);
 
-  int32_t extract_transcripts_from_graphs(
-      BundleData *bundle, GraphTables& tables,
-      std::vector<int32_t>& guide_prediction, int32_t gene_count);
+  int32_t extract_transcripts_from_graphs(BundleData *bundle,
+                                          GraphTables& tables,
+                                          std::vector<int32_t>& guide_prediction,
+                                          int32_t gene_count);
 
 } // namespace ribbon

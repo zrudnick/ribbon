@@ -671,8 +671,7 @@ namespace ribbon {
   // Groups the unflagged predictions that share an exon on the same strand
   // into genes (union-find). Returns, for each prediction, the index of the
   // root of its gene.
-  std::vector<int32_t> group_predictions_into_genes(
-      PredictionList& predictions) {
+  std::vector<int32_t> group_predictions_into_genes(PredictionList& predictions) {
     int32_t prediction_count = count_of(predictions);
     std::vector<int32_t> gene_parent;
     for (int32_t i = 0; i < prediction_count; i++) gene_parent.push_back(i);
@@ -753,8 +752,8 @@ namespace ribbon {
 
   // Lists, for each cell of the bundle, the junctions its reads are split
   // across.
-  std::vector<CellJunctionReads> collect_cell_junction_reads(
-      BundleData *bundle, int32_t cell_count) {
+  std::vector<CellJunctionReads> collect_cell_junction_reads(BundleData *bundle,
+                                                             int32_t cell_count) {
     std::vector<CellJunctionReads> cell_reads(cell_count);
     for (auto& read : bundle->reads) {
       if (read->bc < 0 || read->bc >= cell_count) continue;

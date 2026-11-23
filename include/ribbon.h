@@ -620,8 +620,8 @@ namespace ribbon {
   // Returns the junction in the sorted list that has the same start, end and
   // strand as new_junction. If there is none, moves new_junction into the list
   // at its place and returns it.
-  inline CJunction *add_junction_if_new(
-      JunctionList& junctions, std::unique_ptr<CJunction> new_junction) {
+  inline CJunction *add_junction_if_new(JunctionList& junctions,
+                                        std::unique_ptr<CJunction> new_junction) {
     auto it = std::lower_bound(
         junctions.begin(), junctions.end(), new_junction.get(),
         [](const std::unique_ptr<CJunction>& a, const CJunction *b) {

@@ -446,15 +446,17 @@ namespace ribbon {
   // Walks the segments of a read over the graph nodes of its groups, adds its
   // coverage to each node it overlaps and lists the touched nodes, per graph:
   // read_graph_idxs holds the graphs and read_nodes[i] the nodes in graph i.
-  void get_read_graph_nodes(
-      char strand, float read_coverage, std::vector<int32_t>& read_graph_idxs,
-      float strand_prop, std::vector<std::vector<int32_t>>& read_nodes,
-      ReadList& reads, int32_t read_idx,
-      std::vector<std::vector<int32_t>>& read_group,
-      std::vector<int32_t>& merge_map,
-      PerStrand<std::vector<int32_t>>& group_to_pre_graph_segment,
-      PerStrand<SegmentNodesList>& segment_nodes,
-      PerStrand<std::vector<SpliceGraph>>& splice_graphs) {
+  void get_read_graph_nodes(char strand,
+                            float read_coverage,
+                            std::vector<int32_t>& read_graph_idxs,
+                            float strand_prop,
+                            std::vector<std::vector<int32_t>>& read_nodes,
+                            ReadList& reads, int32_t read_idx,
+                            std::vector<std::vector<int32_t>>& read_group,
+                            std::vector<int32_t>& merge_map,
+                            PerStrand<std::vector<int32_t>>& group_to_pre_graph_segment,
+                            PerStrand<SegmentNodesList>& segment_nodes,
+                            PerStrand<std::vector<SpliceGraph>>& splice_graphs) {
     // Where we are in the read: the last node added and the current segment.
     int32_t last_node_id = -1;
     int32_t last_graph_idx = -1;
@@ -560,11 +562,18 @@ namespace ribbon {
   // it covers (and abundance x raw_scale to their raw coverage, see
   // weight_reads_by_molecule), and the bases it adds to placed_bases if
   // given. Updates long_start and long_end; returns NULL for one node.
-  CTransfrag *add_read_abundance_to_transfrag(
-      SpliceGraph& graph, std::vector<int32_t>& nodes, BitVec& path_bits,
-      float abundance, float raw_scale, uint32_t read_start, uint32_t read_end,
-      int32_t cell_count, int32_t cell, uint32_t gap_start, uint32_t gap_end,
-      double *placed_bases) {
+  CTransfrag *add_read_abundance_to_transfrag(SpliceGraph& graph,
+                                              std::vector<int32_t>& nodes,
+                                              BitVec& path_bits,
+                                              float abundance,
+                                              float raw_scale,
+                                              uint32_t read_start,
+                                              uint32_t read_end,
+                                              int32_t cell_count,
+                                              int32_t cell,
+                                              uint32_t gap_start,
+                                              uint32_t gap_end,
+                                              double *placed_bases) {
     // Add the read's coverage in this cell to each node, without the bases it
     // does not cover (before its start, after its end or in the mate gap).
     for (int32_t i = 0; i < count_of(nodes); i++) {
@@ -708,7 +717,7 @@ namespace ribbon {
 
   // Adds a path_bits with its nodes as a transfrag of the graph.
   void add_path_bits(const FragmentPlacement& placement, int32_t graph,
-                   BitVec& path_bits, std::vector<int32_t>& nodes) {
+                     BitVec& path_bits, std::vector<int32_t>& nodes) {
     GraphTables& tables = placement.tables;
     char strand = placement.strand;
     add_read_abundance_to_transfrag(
@@ -723,7 +732,7 @@ namespace ribbon {
   // edges between them that are continuous or spliced by a junction of the
   // mate.
   void build_mate_path_bits(const FragmentPlacement& placement, int32_t graph,
-                          std::vector<int32_t>& nodes, BitVec& path_bits) {
+                            std::vector<int32_t>& nodes, BitVec& path_bits) {
     GraphTables& tables = placement.tables;
     char strand = placement.strand;
     CReadAln& mate = *placement.reads[placement.mate_idx];
@@ -764,7 +773,7 @@ namespace ribbon {
   // restarts at the second node. The nodes that were added are removed from
   // nodes.
   void build_read_path_bits(const FragmentPlacement& placement, int32_t graph,
-                          std::vector<int32_t>& nodes, BitVec& path_bits) {
+                            std::vector<int32_t>& nodes, BitVec& path_bits) {
     GraphTables& tables = placement.tables;
     char strand = placement.strand;
     CReadAln& read = *placement.reads[placement.read_idx];
