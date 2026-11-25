@@ -17,10 +17,6 @@ namespace ribbon {
     // For each node, the transfrags that have abundance in this cell (in the
     // order of the node's transfrags); set once the cell's abundances are known
     const std::vector<std::vector<int32_t>> *cell_transfrags = nullptr;
-    // True during the de novo pass that credits guides to cells
-    // (extract_cell_denovo_predictions), where paths are not checked with
-    // is_path_contradicted: there it only took guides away from their cells
-    bool credit_pass = false;
     // For each node, the cell's abundance of transfrags that start there over
     // that of transfrags that end there (0 if either is 0); set once per cell,
     // see compute_cell_node_rates
@@ -48,10 +44,6 @@ namespace ribbon {
                            int32_t first_prediction);
 
   int32_t find_transcripts(const FlowContext& shared_context,
-                           int32_t gene_count,
-                           std::vector<CGuide>& matched_guides,
-                           std::vector<GffObj *>& guides,
-                           std::vector<int32_t>& guide_prediction,
-                           BitVec& low_cov_flags);
+                           int32_t gene_count, BitVec& low_cov_flags);
 
 } // namespace ribbon

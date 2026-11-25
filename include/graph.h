@@ -23,8 +23,6 @@ namespace ribbon {
     float from;
     float to;
     float abundance;
-    // True for the link a guide's start or end made to the source or sink.
-    bool made_by_guide = false;
   };
   using PendingTransfragList = std::vector<PendingTransfrag>;
 
@@ -167,8 +165,7 @@ namespace ribbon {
                                         AssemblyState& state);
 
   void get_splice_graphs(BundleData *bundle, AssemblyState& state,
-                         GraphTables& tables,
-                         std::vector<GuideBoundary>& guide_boundaries);
+                         GraphTables& tables);
 
   void free_pre_graphs(AssemblyState& state);
 
@@ -179,7 +176,6 @@ namespace ribbon {
 
   int32_t extract_transcripts_from_graphs(BundleData *bundle,
                                           GraphTables& tables,
-                                          std::vector<int32_t>& guide_prediction,
                                           int32_t gene_count);
 
 } // namespace ribbon

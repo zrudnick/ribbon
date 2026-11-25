@@ -7,7 +7,8 @@ extern bool trim_by_coverage;
 extern int32_t allowed_nodes;
 
 // Builds the splice graph of one pre-graph: nodes between junctions, the
-// source and sink links, the guide boundaries and the parent/child bit vectors.
+// source and sink links and the parent/child bit vectors. Guides add no nodes
+// here; their links to the source and sink come later (guides.cpp).
 
 namespace ribbon {
 
@@ -24,160 +25,6 @@ namespace ribbon {
                                                        start, end, node_id));
 
     return (graph_nodes.back().get());
-  }
-
-  // Splits `graph_node` at a guide transcript's start (`new_start`) and links
-  // the new downstream node directly from source, using the coverage jump
-  // around new_start to estimate the new source->guide transfrag's abundance.
-  CGraphnode *link_source_to_guide_start(const GraphBuildContext& context,
-                                         uint32_t new_start,
-                                         uint32_t new_end,
-                                         CGraphnode *graph_node,
-                                         PendingTransfragList& pending_transfrags,
-                                         int32_t& node_count,
-                                         PreGraphSegment *pre_graph_segment,
-                                         int32_t& edge_count) {
-    // The new_start is very close to graph_node start
-    if (graph_node->start + long_intron_anchor > new_start) {
-      for (int32_t p = 0; p < count_of(graph_node->parent); p++)
-        if (!graph_node->parent[p]) return (graph_node);
-    }
-
-    // Estimate the abundance of the source link from the coverage jump at
-    // new_start.
-    double coverage_left = 0;
-    double coverage_right = 0;
-
-    if (new_start > graph_node->start) {
-      uint32_t window_start = graph_node->start;
-      if (new_start - window_start > coverage_window_len) {
-        window_start = new_start - coverage_window_len;
-      }
-
-      coverage_left = get_stranded_coverage(context.strand,
-                                            window_start - context.ref_start,
-                                            new_start - 1 - context.ref_start,
-                                            *context.bp_coverage);
-      coverage_left /= new_start - window_start;
-    }
-    if (new_start < new_end) {
-      uint32_t window_end = new_end;
-      if (new_end - new_start >= coverage_window_len) {
-        window_end = new_start + coverage_window_len - 1;
-      }
-
-      coverage_right = get_stranded_coverage(context.strand,
-                                             new_start - context.ref_start,
-                                             window_end - context.ref_start,
-                                             *context.bp_coverage);
-      coverage_right /= window_end - new_start + 1;
-    }
-
-    double max_abundance = coverage_right - coverage_left;
-    if (max_abundance < min_transfrag_abundance)
-      max_abundance = min_transfrag_abundance;
-
-    // Split the node at new_start if there is a part before it.
-    if (graph_node->start <= new_start - 1) {
-      uint32_t prev_end = graph_node->end;
-      graph_node->end = new_start - 1;
-      CGraphnode *prev_node = graph_node;
-      graph_node = add_graph_node(context, new_start, prev_end, node_count,
-                                  pre_graph_segment);
-      node_count++;
-
-      pending_transfrags.push_back({float(prev_node->node_id),
-                                    float(graph_node->node_id),
-                                    min_transfrag_abundance});
-      // This node is the child of previous node
-      prev_node->child.push_back(graph_node->node_id);
-      // This node has as parent the previous node
-      graph_node->parent.push_back(prev_node->node_id);
-    }
-    // This node is the child of source
-    context.source->child.push_back(graph_node->node_id);
-    // This node has source as parent
-    graph_node->parent.insert(graph_node->parent.begin(),
-                              context.source->node_id);
-    pending_transfrags.push_back({0.0f, float(node_count - 1),
-                                  float(max_abundance), true});
-    // COUNT 1 EDGE HERE because the source to guide edge was already included
-    // in our count
-    edge_count++;
-
-    return (graph_node);
-  }
-
-  // Splits `graph_node` at a guide transcript's end (`new_start`) and links the
-  // upstream part directly to sink, using the coverage drop around new_start to
-  // estimate the new guide->sink transfrag's abundance.
-  CGraphnode *link_guide_end_to_sink(const GraphBuildContext& context,
-                                     uint32_t new_start,
-                                     uint32_t new_end,
-                                     CGraphnode *graph_node,
-                                     PendingTransfragList& pending_transfrags,
-                                     int32_t& node_count,
-                                     PreGraphSegment *pre_graph_segment,
-                                     int32_t& edge_count) {
-    // Estimate the abundance of the sink link from the coverage drop at
-    // new_start.
-    double coverage_left = 0;
-    double coverage_right = 0;
-
-    if (new_start >= graph_node->start) {
-      uint32_t window_start = graph_node->start;
-      if (new_start - window_start >= coverage_window_len) {
-        window_start = new_start - coverage_window_len + 1;
-      }
-
-      coverage_left = get_stranded_coverage(context.strand,
-                                            window_start - context.ref_start,
-                                            new_start - context.ref_start,
-                                                *context.bp_coverage);
-      coverage_left /= new_start - window_start + 1;
-    }
-    if (new_start + 1 < new_end) {
-      uint32_t window_end = new_end;
-      if (new_end - new_start > coverage_window_len) {
-        window_end = new_start + coverage_window_len;
-      }
-
-      coverage_right = get_stranded_coverage(context.strand,
-                                             new_start + 1 - context.ref_start,
-                                             window_end - context.ref_start,
-                                             *context.bp_coverage);
-      coverage_right /= window_end - new_start;
-    }
-
-    double max_abundance = coverage_left - coverage_right;
-    if (max_abundance < min_transfrag_abundance)
-      max_abundance = min_transfrag_abundance;
-
-    // Split the node after new_start and link the left part to the sink.
-    float prev_node_id = node_count - 1;
-    uint32_t prev_end = graph_node->end;
-    graph_node->end = new_start;
-    CGraphnode *prev_node = graph_node;
-    graph_node = add_graph_node(context, new_start + 1, prev_end, node_count,
-                                pre_graph_segment);
-    node_count++;
-    // This node is the child of previous node
-    prev_node->child.push_back(graph_node->node_id);
-    // This node has as parent the previous node
-    graph_node->parent.push_back(prev_node->node_id);
-    // The prev_node is the parent of sink
-    context.sink->parent.push_back(prev_node->node_id);
-
-    pending_transfrags.push_back({prev_node_id, -1.0f, float(max_abundance),
-                                  true});
-    pending_transfrags.push_back({float(prev_node->node_id),
-                                  float(graph_node->node_id),
-                                  min_transfrag_abundance});
-    // COUNT 1 EDGE HERE because the source to guide edge was already included
-    // in our count
-    edge_count++;
-
-    return (graph_node);
   }
 
   // Makes child a child of parent and counts the edge between them.
@@ -298,73 +145,6 @@ namespace ribbon {
     children[node->node_id] = 1;
 
     return (children);
-  }
-
-  // Splits graph_node at the guide starts and ends of this strand that lie
-  // before limit, advancing guide_boundary_idx past them. A guide start links
-  // its part of the node to the source, a guide end links the part before it
-  // to the sink. Returns the last node.
-  CGraphnode *split_node_at_guide_boundaries(const GraphBuildContext& context,
-                                             std::vector<GuideBoundary>& guide_boundaries,
-                                             int32_t& guide_boundary_idx,
-                                             uint32_t limit,
-                                             uint32_t curr_start,
-                                             uint32_t pre_graph_segment_end,
-                                             CGraphnode *graph_node,
-                                             PendingTransfragList& pending_transfrags,
-                                             int32_t& node_count,
-                                             PreGraphSegment *pre_graph_segment,
-                                             int32_t& edge_count) {
-    int32_t boundary_count = count_of(guide_boundaries);
-
-    // Skip the boundaries that are not after the start of the node.
-    while (guide_boundary_idx < boundary_count
-           && guide_boundaries[guide_boundary_idx].pos
-           <= graph_node->start) guide_boundary_idx++;
-
-    while (true) {
-      while (guide_boundary_idx < boundary_count
-             && guide_boundaries[guide_boundary_idx].strand
-             != context.strand) guide_boundary_idx++;
-
-      if (guide_boundary_idx >= boundary_count
-          || guide_boundaries[guide_boundary_idx].pos >= limit) break;
-
-      uint32_t segment_start = guide_boundaries[guide_boundary_idx].pos;
-      uint32_t segment_end = limit;
-      bool is_guide_start = guide_boundaries[guide_boundary_idx].pos
-          < guide_boundaries[guide_boundary_idx].exon_other_end;
-      guide_boundary_idx++;
-      // Ignore a guide that does not reach into this segment.
-      if (is_guide_start) {
-        if (guide_boundaries[guide_boundary_idx - 1].exon_other_end
-            > pre_graph_segment_end)
-          continue;
-      } else if (guide_boundaries[guide_boundary_idx - 1].exon_other_end
-                 < curr_start)
-        continue;
-
-      // The part ends at the next boundary of this strand, if it is before the
-      // limit.
-      while (guide_boundary_idx < boundary_count
-             && guide_boundaries[guide_boundary_idx].strand
-             != context.strand) guide_boundary_idx++;
-      if (guide_boundary_idx < boundary_count
-          && guide_boundaries[guide_boundary_idx].pos < limit)
-        segment_end = guide_boundaries[guide_boundary_idx].pos;
-
-      if (is_guide_start) {
-        graph_node = link_source_to_guide_start(context, segment_start,
-            segment_end, graph_node, pending_transfrags, node_count,
-            pre_graph_segment, edge_count);
-      } else {
-        graph_node = link_guide_end_to_sink(context, segment_start,
-            segment_end, graph_node, pending_transfrags, node_count,
-            pre_graph_segment, edge_count);
-      }
-    }
-
-    return graph_node;
   }
 
   // Links the nodes to the source or sink where the coverage jumps up or drops
@@ -514,29 +294,7 @@ namespace ribbon {
             std::make_unique<CTransfrag>(cell_count, transfrag_nodes,
                                          edge_path_bits,
                                          pending.abundance));
-        transfrag.back()->made_by_guide = pending.made_by_guide;
       }
-    }
-  }
-
-  // Checks if any guide boundary (a guide start or end, sorted by position)
-  // on this strand falls inside the pre-graph; if so remembers it and rewinds
-  // guide_boundary_idx, which the walk advances past handled edges.
-  void SpliceGraphBuilder::find_guide_boundary_in_pre_graph() {
-    PreGraphSegment *segment = pre_graph_segments[pre_graph->start_node].get();
-    while (guide_boundary_idx < count_of(guide_boundaries)
-           && segment != NULL) {
-      uint32_t start = guide_boundaries[guide_boundary_idx].pos;
-      uint32_t end = guide_boundaries[guide_boundary_idx].exon_other_end;
-      if (start > end) std::swap(start, end);
-      if (segment->end < start) segment = segment->next_node;
-      // The segment->end>=start
-      else if (guide_boundaries[guide_boundary_idx].strand == strand
-               && segment->start <= end) {
-        guide_boundary_idx = 0;
-        pre_graph_has_guide_boundary = true;
-        break;
-      } else guide_boundary_idx++;
     }
   }
 
@@ -605,17 +363,10 @@ namespace ribbon {
     graph_node = next_node;
   }
 
-  // Splits the open node at the guide boundaries and at the coverage drops
-  // before end_pos, and ends it there. The splits may already have added
-  // smaller nodes, and the open node becomes the last of them.
+  // Splits the open node at the coverage drops before end_pos, and ends it
+  // there. The splits may already have added smaller nodes, and the open node
+  // becomes the last of them.
   void SpliceGraphBuilder::close_open_node_at(uint32_t end_pos) {
-    // Add the guide starts and ends before end_pos.
-    if (pre_graph_has_guide_boundary)
-      graph_node = split_node_at_guide_boundaries(context, guide_boundaries,
-          guide_boundary_idx, end_pos, curr_start, pre_graph_segment_end,
-          graph_node, pending_transfrags, node_count, pre_graph_segment,
-          edge_count);
-
     // Find intermediate nodes at coverage drops; alternatively this could be
     // done only for end nodes
     if (trim_by_coverage)
@@ -842,17 +593,14 @@ namespace ribbon {
     return node_count;
   }
 
-  // Sets up the source and sink nodes and checks whether any guide boundary
-  // falls inside the pre-graph.
+  // Sets up the source and sink nodes.
   SpliceGraphBuilder::SpliceGraphBuilder(
       BundleData *bundle_in, AssemblyState& state_in, GraphTables& tables_in,
-      char strand_in, int32_t graph_idx_in,
-      std::vector<GuideBoundary>& guide_boundaries_in)
+      char strand_in, int32_t graph_idx_in)
       : bundle(bundle_in), state(state_in),
         graph(tables_in.splice_graphs[strand_in][graph_idx_in]),
         strand(strand_in), graph_idx(graph_idx_in),
         edge_count(graph.edge_count),
-        guide_boundaries(guide_boundaries_in),
         ref_start(bundle_in->start), junction(bundle_in->junction),
         n_junctions(count_of(bundle_in->junction)),
         pre_graph(state_in.pre_graph_list[strand_in][graph_idx_in].get()),
@@ -871,7 +619,6 @@ namespace ribbon {
                &tables_in.pre_graph_segment_to_graph_nodes[strand_in], source,
                sink, &bundle_in->start_peaks,
                is_mitochondrial(bundle_in->ref_seq)};
-    find_guide_boundary_in_pre_graph();
   }
 
   // Goes through the pre-graph segments left to right, creates the graph
@@ -888,14 +635,12 @@ namespace ribbon {
 
   // Builds the splice graph of one pre-graph on a strand: walks its segments
   // left to right, makes a node per stretch between junctions, splits them at
-  // guide ends and trim points, prunes the graph and builds its path_bits.
+  // trim points, prunes the graph and builds its path_bits.
   int32_t build_splice_graph(BundleData *bundle, AssemblyState& state,
                              GraphTables& tables,
                              char strand,
-                             int32_t graph_idx,
-                             std::vector<GuideBoundary>& guide_boundaries) {
-    SpliceGraphBuilder builder(bundle, state, tables, strand, graph_idx,
-                               guide_boundaries);
+                             int32_t graph_idx) {
+    SpliceGraphBuilder builder(bundle, state, tables, strand, graph_idx);
     return builder.build();
   }
 

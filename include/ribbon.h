@@ -120,8 +120,6 @@ class BitVec {
 inline BitVec operator&(BitVec a, const BitVec& b) { return a &= b; }
 inline BitVec operator|(BitVec a, const BitVec& b) { return a |= b; }
 
-#define MIN_EXON_OVERLAP 5 // minimum overlap for exons
-
 namespace ribbon {
   // Read count data for exon or intron of a reference transcript
   struct FeatureCounts {
@@ -174,40 +172,6 @@ namespace ribbon {
   // The guide exons (or introns) of one bundle, in the order they were first
   // seen: feature id N is at index N-1. The table owns them.
   using FeatureTable = std::vector<std::unique_ptr<FeatureCounts>>;
-
-  struct ExonOverlap {
-    // Pointer to an item of BundleCounts::local_exon_counts
-    FeatureCounts *feature = NULL;
-    byte mate_overlap = 0; // =1 if the mate of this read overlaps the same exon
-    long overlap_len = 0;
-
-    // Orders by mate overlap, then longer overlap, then longer feature, then
-    // strand and start.
-    bool operator<(const ExonOverlap& overlap) const {
-      if (mate_overlap != overlap.mate_overlap)
-        return (mate_overlap > overlap.mate_overlap);
-      if (overlap_len != overlap.overlap_len)
-        return (overlap_len > overlap.overlap_len);
-      if (feature->end - feature->start != overlap.feature->end
-          - overlap.feature->start)
-        return (feature->end - feature->start > overlap.feature->end
-                - overlap.feature->start);
-      if (feature->strand != overlap.feature->strand)
-        return (feature->strand < overlap.feature->strand);
-      return (feature->start < overlap.feature->start);
-    } // operator <
-
-    // Equal if the mate flag, overlap length and feature are all the same.
-    bool operator==(const ExonOverlap& overlap) const {
-      return (mate_overlap == overlap.mate_overlap
-              && overlap_len == overlap.overlap_len
-              && feature == overlap.feature);
-    }
-    ExonOverlap(FeatureCounts *f = NULL, long overlap_length = 0,
-                byte m_overlap = 0)
-        : feature(f), mate_overlap(m_overlap), overlap_len(overlap_length) {
-    }
-  };
 
   struct TranscriptCounts { // storing read-count data for a transcript (guide)
     // Read-count data of a reference transcript (guide). We create one for each
@@ -348,11 +312,6 @@ namespace ribbon {
     std::vector<FeatureCounts *> guide_exons;
     // Set of guide introns in this bundle, sorted by start coordinate
     std::vector<FeatureCounts *> guide_introns;
-    // Index of the first exon that overlaps exon_cache_pos.
-    int32_t exon_cache_idx;
-    // Left coordinate of last cached exon overlap query
-    // (find_overlapping_exons())
-    long exon_cache_pos;
 
     // Per-bundle tables of the guide features; the element index of a feature
     // is FeatureCounts::id - 1.
@@ -364,7 +323,7 @@ namespace ribbon {
 
     BundleCounts(long t_l = 0, long t_r = 0)
         : bundle_start(t_l), cluster_end(t_r), transcripts(), guide_exons(),
-          guide_introns(), exon_cache_idx(0), exon_cache_pos(0),
+          guide_introns(),
           exon_id_counter(0), intron_id_counter(0) {}
 
     // Adds a guide to the bundle: extends the bundle range and collects the
@@ -388,71 +347,6 @@ namespace ribbon {
       return tdata->transcript_id;
     }
 
-    // Finds the guide exons that overlap the query interval and adds them to
-    // ex_overlaps (the strand and mate position refine the match). Returns
-    // whether any exon overlaps.
-    bool find_overlapping_exons(std::vector<ExonOverlap>& ex_overlaps,
-                                long query_start, long query_end,
-                                char strand = '.', int32_t mate_pos = 0) {
-      // We start at the cached exon index if the last query was to the left of
-      // this one.
-      bool has_overlaps = false;
-      if (count_of(guide_exons) == 0) return false;
-      int32_t start_index = 0;
-      bool no_cache = (exon_cache_pos == 0 || exon_cache_pos > query_start);
-      if (no_cache) {
-        exon_cache_idx = count_of(guide_exons) - 1;
-        exon_cache_pos = 0;
-      } else start_index = exon_cache_idx; // must have a valid value
-      bool cache_update_pending = true;
-      int32_t last_checked_exon = count_of(guide_exons) - 1;
-      int32_t query_len = query_end - query_start + 1;
-      int32_t min_overlap = GMIN(query_len, MIN_EXON_OVERLAP);
-
-      // Check the exons that start before the end of the query.
-      for (long i = start_index; i < count_of(guide_exons); ++i) {
-        last_checked_exon = i;
-        long exon_start = guide_exons[i]->start;
-        long exon_end = guide_exons[i]->end;
-        if (exon_start > query_end) break;
-        if (query_start > exon_end) continue;
-        // Exon overlap here
-        long overlap_len = 0;
-        if (query_start < exon_start) {
-          overlap_len = (query_end < exon_end ? query_end - exon_start + 1
-                         : exon_end - exon_start + 1);
-        } else { // exon_start<=query_start
-          overlap_len = (query_end < exon_end ? query_end - query_start + 1
-                         : exon_end - query_start + 1);
-        }
-        if (cache_update_pending) {
-          // Cache first overlap
-          exon_cache_idx = i;
-          cache_update_pending = false;
-        }
-        // Non-matching strand
-        if (strand != '.' && strand != guide_exons[i]->strand) continue;
-
-        // Keep the overlap if the mate read also overlaps this exon or the
-        // overlap is long enough.
-        byte mate_overlap = 0;
-        if (mate_pos && mate_pos + 10 > exon_start && mate_pos + 5 < exon_end)
-          mate_overlap = 1; // mate read likely overlaps this exon
-        if (mate_overlap || overlap_len >= min_overlap) {
-          has_overlaps = true;
-          ExonOverlap overlap(guide_exons[i], overlap_len, mate_overlap);
-          if (find_sorted(ex_overlaps, overlap) < 0)
-            insert_sorted(ex_overlaps, overlap);
-        }
-      }
-
-      // Remember where this query ended for the next one.
-      // If no overlap was found, the cache points at the last exon checked.
-      if (cache_update_pending) exon_cache_idx = last_checked_exon;
-      exon_cache_pos = query_start;
-      return has_overlaps;
-    }
-
     // Returns the guide intron with exactly these coordinates and strand, or
     // NULL if there is none.
     FeatureCounts *find_intron(long query_start, long query_end, char strand) {
@@ -474,7 +368,6 @@ namespace ribbon {
     GBST_UNSET = 0,
     GBST_IN_BUNDLE, // 1: added to bundle
     GBST_ALL_INTR_COV, // 2: all introns covered by at least one read
-    GBST_STORED, // 3: stored to be printed
   };
   GuideBundleStatus get_guide_status(GffObj *t);
   void set_guide_status(GffObj *t, GuideBundleStatus status);
@@ -754,10 +647,6 @@ namespace ribbon {
     std::vector<float> exon_cov;
     // SCELL this will stay empty until print_results
     std::vector<float> cell_cov;
-    // Guides only: the coverage the flow gave each cell, kept when
-    // credit_guides_found_by_denovo clears the cells where de novo does not find
-    // the guide (see credit_best_cell_to_guides_without_cells)
-    std::vector<float> flow_cov;
     // The graph path (node ids) the prediction came from, kept until the
     // graph's cells are done (see drop_shadowed_paths)
     std::vector<int32_t> path_nodes;
@@ -776,13 +665,13 @@ namespace ribbon {
                 char _strand = '.', int32_t _len = 0, bool f = true)
         : GSeg(g_start, g_end), gene_no(_gene_no), t_eq(guide), cell(_cell),
           cov(_cov), strand(_strand), tlen(_len), flag(f), exons(),
-          exon_cov(), cell_cov(), flow_cov(), path_nodes() {}
+          exon_cov(), cell_cov(), path_nodes() {}
     // SCELL
     CPrediction(const CPrediction& c)
         : GSeg(c.start, c.end), gene_no(c.gene_no), t_eq(c.t_eq), cell(c.cell),
           cov(c.cov), strand(c.strand), tlen(c.tlen), flag(c.flag),
           exons(c.exons), exon_cov(c.exon_cov), cell_cov(c.cell_cov),
-          flow_cov(c.flow_cov), path_nodes(c.path_nodes),
+          path_nodes(c.path_nodes),
           raw_ratio(c.raw_ratio), cell_molecules(c.cell_molecules),
           cell_quant_cov(c.cell_quant_cov) {}
     ~CPrediction() { // GFREE(id);
@@ -894,17 +783,16 @@ namespace ribbon {
       // This also adds exon/intron info
     }
 
-    // Checks the exons and introns of one read alignment against the guide
-    // exons and introns of this bundle: counts the matched introns, collects
-    // the alignment's junctions and refines splice_strand from the guides.
-    void eval_read_aln(GReadAlnData& aln_data, char& splice_strand) {
+    // Checks the introns of one read alignment against the guide introns of
+    // this bundle: collects the alignment's junctions and counts the guide
+    // introns they match (guide junctions are kept by the junction filters).
+    void eval_read_aln(GReadAlnData& aln_data, char splice_strand) {
       // Skip alignments that no guide can match.
       if (!counts) {
         return; // no ref transcripts available for this reads' region
       }
 
       GSamRecord& brec = *(aln_data.brec);
-      int32_t mate_pos = brec.mate_start();
 
       if ((int32_t)brec.end < counts->bundle_start
           || (int32_t)brec.start > counts->cluster_end) {
@@ -916,47 +804,16 @@ namespace ribbon {
         return; // nothing to do without transcripts
       }
 
-      // Find the guide exons that each read exon overlaps and match the introns
-      // between the exons to the guide introns.
-      char strand_bits = 0;
-      for (int32_t i = 0; i < brec.exons.Count(); i++) { // for each read exon
-
-        std::vector<ExonOverlap> exon_overlaps;
-
-        if (counts->find_overlapping_exons(exon_overlaps, brec.exons[i].start,
-                                           brec.exons[i].end, splice_strand,
-                                           mate_pos)) {
-          // Largest guide exon overlap
-          int32_t best_overlap = exon_overlaps[0].overlap_len;
-          int32_t mate_overlap = exon_overlaps[0].mate_overlap;
-
-          // Check all overlaps of similar length
-          for (int32_t k = 0; k < count_of(exon_overlaps); ++k) {
-            bool is_worse_overlap
-                = exon_overlaps[k].mate_overlap < mate_overlap
-                  || exon_overlaps[k].overlap_len + 5 < best_overlap;
-            if (k && is_worse_overlap)
-              break; // NOTE ignore further overlaps after a mate matched
-            // Or if they are shorter than max_overlap-5
-            if (exon_overlaps[k].feature->strand == '+') strand_bits |= 0x01;
-            else if (exon_overlaps[k].feature->strand == '-') strand_bits |= 0x02;
-          } // for each overlap
-        } // has guide exon overlaps
-        if (i > 0) { // adjacent intron check for match to guide introns
-          int32_t j_l = brec.exons[i - 1].end + 1;
-          int32_t j_r = brec.exons[i].start - 1;
-          aln_data.juncs.push_back(std::make_unique<CJunction>(j_l, j_r));
-          FeatureCounts *ri = counts->find_intron(j_l, j_r, splice_strand);
-          if (ri) { // update guide intron counts
-            ri->read_count++;
-            aln_data.juncs.back()->guide_match = 1;
-          }
-        } // neighboring intron processing
-      } // for each read exon
-
-      // An unstranded alignment takes the strand of the guides it overlaps.
-      if (splice_strand == '.' && strand_bits && strand_bits < 3) {
-        splice_strand = (strand_bits == 1) ? '+' : '-';
+      // Match the introns between the read exons to the guide introns.
+      for (int32_t i = 1; i < brec.exons.Count(); i++) {
+        int32_t j_l = brec.exons[i - 1].end + 1;
+        int32_t j_r = brec.exons[i].start - 1;
+        aln_data.juncs.push_back(std::make_unique<CJunction>(j_l, j_r));
+        FeatureCounts *ri = counts->find_intron(j_l, j_r, splice_strand);
+        if (ri) { // update guide intron counts
+          ri->read_count++;
+          aln_data.juncs.back()->guide_match = 1;
+        }
       }
     }
 
@@ -1045,21 +902,6 @@ namespace ribbon {
         : GSeg(r_start, r_end), cov(_cov), bid(_bid), next_node(_next_node) {}
   };
 
-  // What does not depend on the cell in the flow of a guide through the graph.
-  struct GuideFlowCache {
-    // Bit t is set if the path_bits of the guide contains the path_bits of
-    // transfrag t of the graph
-    BitVec contained_transfrags;
-    // For each node of the guide: its transfrags with abundance that the guide
-    // contains, in the order of the node's transfrags
-    std::vector<std::vector<int32_t>> path_transfrags;
-    // For each node of the guide: the sum of the abundance of the transfrags
-    // with abundance that the guide does not contain, which enter the node
-    // (pooled_in) or leave it (pooled_out)
-    std::vector<float> pooled_in;
-    std::vector<float> pooled_out;
-  };
-
   // A path through the splice graph that reads support: its nodes, its
   // path_bits of nodes and edges, its abundance and the abundance in each cell.
   struct CTransfrag {
@@ -1068,16 +910,11 @@ namespace ribbon {
     BitVec path_bits;
     float abundance;
     std::vector<float> cell_abundance; // SCELL -> abundance in each single cell
-    // Share of the transfrag's abundance that the current guide path uses.
-    float use_path;
     bool real : 1;
     // True for the link to the source or sink that a guide's start or end made,
     // as opposed to one that the reads support.
     bool made_by_guide = false;
     int32_t guide;
-    // For the transfrag of a guide: what the flow functions reuse from cell to
-    // cell (see prepare_guide_flow_cache in flow.cpp)
-    std::shared_ptr<GuideFlowCache> flow_cache;
     // For long reads: min start of all longreads sharing transfrag
     uint32_t long_start;
     // for long reads: max end of all longreads sharing transfrag
@@ -1086,7 +923,7 @@ namespace ribbon {
     CTransfrag(int32_t _ncell, std::vector<int32_t>& _nodes, BitVec& bit,
                float abund = 0, bool treal = false, int32_t t_guide = 0)
         : cell_count(_ncell), nodes(_nodes), path_bits(bit), abundance(abund),
-          use_path(-1), real(treal), guide(t_guide), long_start(0),
+          real(treal), guide(t_guide), long_start(0),
           long_end(0) {
       // SCELL : set all cell abundances to 0 initially
       cell_abundance.resize(_ncell, 0.0);
@@ -1095,7 +932,7 @@ namespace ribbon {
     CTransfrag(int32_t _ncell = 0, float abund = 0, bool treal = false,
                int32_t t_guide = 0)
         : cell_count(_ncell), nodes(), path_bits(), abundance(abund),
-          cell_abundance(), use_path(-1), real(treal), guide(t_guide),
+          cell_abundance(), real(treal), guide(t_guide),
           long_start(0), long_end(0) {
       // SCELL : set all cell abundances to 0 initially
       cell_abundance.resize(cell_count, 0.0);
@@ -1164,25 +1001,6 @@ namespace ribbon {
   // does not own the transfrags: the TransfragList does.
   using TransfragIndex
       = std::unordered_map<std::vector<int32_t>, CTransfrag *, PathKeyHash>;
-
-  struct GuideBoundary { // a start or end of a guide transcript
-    // If pos < exon_other_end then this is a start; otherwise it is an end
-    uint32_t pos; // genomic position of the guide's start or end
-    // Other end of the guide's first exon (start) or last exon (end)
-    uint32_t exon_other_end;
-    char strand;
-    bool operator<(const GuideBoundary& o) const {
-      return (pos < o.pos
-              || (pos == o.pos
-                  && strand_index(strand) < strand_index(o.strand)));
-    }
-    bool operator==(const GuideBoundary& o) const {
-      return (pos == o.pos && strand == o.strand);
-    }
-    GuideBoundary(uint32_t _pos = 0, uint32_t _exon_other_end = 0,
-                  char _strand = '.')
-        : pos(_pos), exon_other_end(_exon_other_end), strand(_strand) {}
-  };
 
   // A node of the splice graph: an interval with its coverage, children,
   // parents and the transfrags that pass through it.
@@ -1302,7 +1120,6 @@ public:
 #include "flow.h" // types shared by the transcript extraction stages
 #include "low_coverage.h" // low coverage nodes and edges
 #include "path_flow.h" // flow along a path, storing transcripts
-#include "guide_flow.h" // flow for reference (guide) transcripts
 #include "path_extender.h" // greedy extension of a seed node into a path
 #include "transfrag.h" // transfrag path_bits, simplification/stitching
 #include "guides.h" // guide-transcript matching

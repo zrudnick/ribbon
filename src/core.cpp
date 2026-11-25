@@ -52,30 +52,15 @@ namespace ribbon {
   int32_t predict_unstranded_pre_graphs(BundleData *bundle,
                                         AssemblyState& state) {
     int32_t ref_start = bundle->start;
-    std::vector<GffObj *>& guides = bundle->guides;
     BpCoverage& bp_coverage = bundle->bp_coverage;
 
     int32_t gene_count = 0;
-    int32_t g = 0;
 
     // These are neutral pre-graphs that do not overlap any signed reads
     for (int32_t b = 0; b < count_of(state.pre_graph_list['.']); b++) {
       PreGraphSegment *first_segment
           = state.pre_graph_segment_list['.']
                 [state.pre_graph_list['.'][b]->start_node].get();
-      bool guide_ovlp = false;
-      // Multi-exon guides and guides that end before the pre-graph are skipped.
-      auto is_multi_exon_or_before_pre_graph = [&](int32_t idx) {
-        return guides[idx]->exons.Count() > 1
-               || guides[idx]->end < first_segment->start;
-      };
-      while (g < count_of(guides) && is_multi_exon_or_before_pre_graph(g)) {
-        g++;
-      }
-      // Now guides[g] ends at or after the start of pre-graph b
-      if (g < count_of(guides)
-          && guides[g]->start <= first_segment->end) guide_ovlp = true;
-
       // && (count_of(guides) || adaptive || pre_graph_list[1][b]->len >=
       // min_transcript_len)) { // there might be small transfrags that are
       // worth showing, but here we are ignoring them
@@ -84,7 +69,7 @@ namespace ribbon {
       bool has_few_multi_reads = has_coverage
           && (neutral_pre_graph->multi / neutral_pre_graph->cov)
                  <= multi_read_frac * (1 - ERROR_PERC);
-      if (has_coverage && (has_few_multi_reads || guide_ovlp)) {
+      if (has_coverage && has_few_multi_reads) {
         // The pre-graph might contain multiple fragments of a transcript but
         // since we
         // don't know the complete structure -> print only the pieces that are
@@ -136,15 +121,13 @@ namespace ribbon {
   }
 
   // A pre-graph gets a splice graph if it has coverage and is long enough with
-  // few enough multi-hit reads, or if it overlaps a supported guide (there
-  // might be small transfrags from source to sink worth keeping).
-  static bool is_pre_graph_worth_processing(const PreGraph& pre_graph,
-                                            int32_t overlapping_guides) {
+  // few enough multi-hit reads (with or without guides).
+  static bool is_pre_graph_worth_processing(const PreGraph& pre_graph) {
     if (!pre_graph.cov) return false;
     bool has_few_multi_reads
         = (pre_graph.multi / pre_graph.cov) <= multi_read_frac;
     bool is_long_enough = pre_graph.len >= min_transcript_len;
-    return (has_few_multi_reads && is_long_enough) || overlapping_guides;
+    return has_few_multi_reads && is_long_enough;
   }
 
   // Builds the splice graph and the transfrag index of each pre-graph of one
@@ -152,7 +135,6 @@ namespace ribbon {
   static void get_stranded_splice_graphs(BundleData *bundle,
                                          AssemblyState& state,
                                          GraphTables& tables,
-                                         std::vector<GuideBoundary>& guide_boundaries,
                                          char strand) {
     std::vector<GffObj *>& guides = bundle->guides;
     PreGraphList& pre_graphs = state.pre_graph_list[strand];
@@ -175,16 +157,14 @@ namespace ribbon {
     for (int32_t i = 0; i < pre_graph_count; i++) {
       SpliceGraph& graph = splice_graphs[i];
 
+      // Each guide may add a source and a sink link to the graph.
       int32_t n_overlapping_guides = count_guides_overlapping_pre_graph(
           guides, strand, segments[pre_graphs[i]->start_node]->start,
           segments[pre_graphs[i]->last_node_id]->end, guide_cursor);
       graph.edge_count += 2 * n_overlapping_guides;
 
-      // Guides are kept at any length, but novel transcripts still need the
-      // minimum transcript length even next to a guide, to stay conservative.
-      if (is_pre_graph_worth_processing(*pre_graphs[i], n_overlapping_guides)) {
-        graph.node_count = build_splice_graph(bundle, state, tables, strand, i,
-            guide_boundaries);
+      if (is_pre_graph_worth_processing(*pre_graphs[i])) {
+        graph.node_count = build_splice_graph(bundle, state, tables, strand, i);
         if (!graph.node_count) continue;
 
         graph.transfrag_index = build_transfrag_index(graph);
@@ -195,11 +175,9 @@ namespace ribbon {
   // Builds the splice graph and the transfrag index of each stranded pre-graph
   // that is worth processing. The graphs are left in tables.
   void get_splice_graphs(BundleData *bundle, AssemblyState& state,
-                         GraphTables& tables,
-                         std::vector<GuideBoundary>& guide_boundaries) {
+                         GraphTables& tables) {
     for (char strand : {'-', '+'}) {
-      get_stranded_splice_graphs(bundle, state, tables, guide_boundaries,
-          strand);
+      get_stranded_splice_graphs(bundle, state, tables, strand);
     }
   }
 
@@ -256,7 +234,6 @@ namespace ribbon {
   // gene_count.
   int32_t extract_transcripts_from_graphs(BundleData *bundle,
                                           GraphTables& tables,
-                                          std::vector<int32_t>& guide_prediction,
                                           int32_t gene_count) {
     std::vector<GffObj *>& guides = bundle->guides;
     int32_t cell_count = count_of(bundle->cell_name);
@@ -268,7 +245,8 @@ namespace ribbon {
       for (int32_t i = 0; i < count_of(tables.splice_graphs[strand]); i++) {
         SpliceGraph& graph = tables.splice_graphs[strand][i];
         if (graph.node_count) {
-          // Include source to guide starts links
+          // Match the guides to the graph: their links to the source and sink
+          // and their backbone transfrags (process_transfrags)
           std::vector<CGuide> matched_guides;
           if (count_of(guides))
             process_reference_guides(graph, strand, matched_guides, bundle);
@@ -297,8 +275,7 @@ namespace ribbon {
           for (int32_t c = 0; c < cell_count; c++) {
             context.cell = c;
             gene_count = find_transcripts(context, gene_count,
-                                          matched_guides, guides,
-                                          guide_prediction, low_cov_flags);
+                                          low_cov_flags);
           }
 
           // Take cells off the paths that other paths explain better, then
@@ -443,9 +420,7 @@ namespace ribbon {
     JunctionList& junction = bundle->junction;
     std::vector<GffObj *>& guides = bundle->guides;
 
-    std::vector<int32_t> guide_prediction;
-    std::vector<GuideBoundary> guide_boundaries;
-    compute_guide_boundaries(guides, guide_boundaries, guide_prediction);
+    mark_guides_with_covered_introns(guides);
 
     // Form groups on strands: all groups below are kept per strand ('-', '.'
     // unknown, '+')
@@ -468,12 +443,12 @@ namespace ribbon {
       // --tso-filter): transcript starts from 5' UMI molecules, used as trim
       // points when the graph is built
       find_start_peaks(bundle);
-      get_splice_graphs(bundle, state, tables, guide_boundaries);
+      get_splice_graphs(bundle, state, tables);
       free_pre_graphs(state);
       fill_transfrags(bundle, state, tables);
       free_read_groups(state);
       gene_count = extract_transcripts_from_graphs(bundle, tables,
-                                                   guide_prediction, gene_count);
+                                                   gene_count);
     } else {
       // No stranded groups: no graphs, only free what is left.
       free_pre_graphs(state);

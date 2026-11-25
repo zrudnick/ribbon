@@ -61,7 +61,7 @@ main_srcs = files('src/ribbon.cpp', 'src/options.cpp', 'src/read_input.cpp',
   'src/core.cpp', 'src/path_bits.cpp',
   'src/coverage.cpp', 'src/junctions.cpp', 'src/grouping.cpp',
   'src/pre_graphs.cpp', 'src/graph_pruning.cpp', 'src/splice_graph.cpp',
-  'src/low_coverage.cpp', 'src/path_flow.cpp', 'src/guide_flow.cpp',
+  'src/low_coverage.cpp', 'src/path_flow.cpp',
   'src/path_extender.cpp', 'src/flow.cpp', 'src/transfrag.cpp', 'src/guides.cpp',
   'src/out.cpp', 'src/predictions.cpp', 'src/threads.cpp', 'src/utils.cpp')
 

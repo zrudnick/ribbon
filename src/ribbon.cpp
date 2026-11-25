@@ -482,8 +482,8 @@ namespace ribbon {
         }
       } // adjusted curr_end and checked for overlapping reference transcripts
 
-      // Check the alignment against the guides (they may set its strand), then
-      // add it to the bundle.
+      // Check the alignment's introns against the guides, then add it to the
+      // bundle.
       GReadAlnData aln_data(brec, '.', nh, hi);
       bundle->eval_read_aln(aln_data, strand);
 

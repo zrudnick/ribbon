@@ -21,10 +21,11 @@ extern float min_read_coverage;
 // (max_flow_and_deplete_transfrags). low_cov_flags marks the nodes and edges
 // to avoid because their pooled coverage is negligible
 // (mark_low_coverage_nodes_and_edges). find_transcripts is the entry point,
-// called once per cell and graph: guides claim their evidence first
-// (assign_flow_to_guides), then extract_transcripts_greedily repeatedly builds
-// the best supported path from the node with the most remaining coverage,
-// stores it (store_transcript) and removes its evidence.
+// called once per cell and graph: extract_transcripts_greedily repeatedly
+// builds the best supported path from the node with the most remaining
+// coverage, stores it (store_transcript) and removes its evidence. Guides take
+// no flow: they only shape the graph (their source/sink links and backbone
+// transfrags) and later label the predictions (predictions.cpp).
 
 namespace ribbon {
 
@@ -147,7 +148,7 @@ namespace ribbon {
       // V6
       if (extend_path(context, seed_node, false, path, current_path_bits,
         node_coverage, path_empty, weak_borrow, low_cov_flags)) {
-        if (drop_contradicted_paths && !context.credit_pass)
+        if (drop_contradicted_paths)
           contradicted = is_path_contradicted(context, path, seed_node);
         // If we found at least one non-empty node on the path, we compute the
         // flow
@@ -233,97 +234,6 @@ namespace ribbon {
                                    transfrag_on_path, used_node,
                                    prev_best_coverage, covered_path_bits,
                                    low_cov_flags, prev_prediction_count);
-    }
-  }
-
-  // Runs the de novo extraction of extract_transcripts_greedily on this cell
-  // as if there were no guides, and returns the transcripts it finds. The
-  // cell's transfrag abundances are restored afterwards, so the guides still
-  // see all the evidence.
-  PredictionList extract_cell_denovo_predictions(const FlowContext& context,
-                                                 int32_t seed_node,
-                                                 int32_t gene_count,
-                                                 std::vector<float> node_coverage,
-                                                 BitVec current_path_bits,
-                                                 BitVec& low_cov_flags) {
-    // Save the cell's abundances. The links that guides made to the source and
-    // sink are no evidence of this cell: we count them as pooled evidence
-    // only, so that they do not end a path where this cell's reads go on.
-    std::vector<float> saved_abundance;
-    for (const auto& transfrag : context.graph.transfrag) {
-      saved_abundance.push_back(transfrag->cell_abundance[context.cell]);
-      if (transfrag->made_by_guide)
-        transfrag->cell_abundance[context.cell] = 0;
-    }
-
-    // Mark the pass, so that contradicted paths are still found here
-    FlowContext credit_context = context;
-    credit_context.credit_pass = true;
-
-    // The node rates without those links
-    std::vector<float> node_rate = compute_cell_node_rates(credit_context);
-    credit_context.node_rate = &node_rate;
-
-    PredictionList denovo_predictions;
-    if (node_coverage[seed_node] >= 1
-        || node_coverage[seed_node] > ERROR_PERC) {
-      BitVec transfrag_on_path(count_of(context.graph.transfrag));
-      BitVec used_node(context.graph.node_count + context.graph.edge_count);
-      extract_transcripts_greedily(credit_context, seed_node, gene_count, true,
-                                   denovo_predictions, node_coverage,
-                                   transfrag_on_path, used_node, 0,
-                                   current_path_bits, low_cov_flags, 0);
-    }
-
-    for (int32_t t = 0; t < count_of(context.graph.transfrag); t++)
-      context.graph.transfrag[t]->cell_abundance[context.cell]
-          = saved_abundance[t];
-    return denovo_predictions;
-  }
-
-  // True if the de novo transcript prediction has the intron chain of guide
-  // (for a single-exon guide: overlaps it).
-  bool is_guide_found_by_denovo(GffObj *guide, const CPrediction *prediction) {
-    int32_t exon_count = guide->exons.Count();
-    if (count_of(prediction->exons) != exon_count) return false;
-    if (exon_count == 1)
-      return prediction->exons[0].start <= guide->exons[0]->end
-             && guide->exons[0]->start <= prediction->exons[0].end;
-    for (int32_t e = 0; e < exon_count; e++) {
-      if (e > 0 && prediction->exons[e].start != guide->exons[e]->start)
-        return false;
-      if (e + 1 < exon_count && prediction->exons[e].end != guide->exons[e]->end)
-        return false;
-    }
-    return true;
-  }
-
-  // Sets this cell's credit for each guide to what de novo found for it: the
-  // guide is a model, and the cell supports it exactly where
-  // extract_cell_denovo_predictions finds its intron chain. Call it right after
-  // the guides have claimed their flow. The coverage the flow gave the cell is
-  // kept in flow_cov, for guides that no cell ends up with.
-  void credit_guides_found_by_denovo(const FlowContext& context,
-                                     const std::vector<CGuide>& matched_guides,
-                                     std::vector<GffObj *>& guides,
-                                     const PredictionList& predictions,
-                                     const std::vector<int32_t>& guide_prediction,
-                                     const PredictionList& denovo_predictions) {
-    for (const CGuide& matched_guide : matched_guides) {
-      int32_t p = guide_prediction[matched_guide.g];
-      if (p < 0) continue;
-      std::vector<float>& cell_cov = predictions[p]->cell_cov;
-      cell_cov.resize(count_of(context.bundle->cell_name), 0.0);
-      std::vector<float>& flow_cov = predictions[p]->flow_cov;
-      flow_cov.resize(count_of(context.bundle->cell_name), 0.0);
-
-      // The cell keeps the coverage the flow gave it only in flow_cov.
-      flow_cov[context.cell] = cell_cov[context.cell];
-      cell_cov[context.cell] = 0;
-      for (const auto& denovo : denovo_predictions)
-        if (is_guide_found_by_denovo(guides[matched_guide.g], denovo.get()))
-          cell_cov[context.cell] = std::max(cell_cov[context.cell],
-                                           (float)denovo->cov);
     }
   }
 
@@ -492,10 +402,6 @@ namespace ribbon {
     return cell_transfrags;
   }
 
-  // Extracts the transcripts of one cell from one graph into
-  // bundle->predictions: computes the node coverage of this cell (rescuing weak
-  // nodes with signal), lets guides claim evidence, extracts the rest greedily.
-  // Returns gene_count.
   // True if transfrag tf fits a path (position_on_path: each node's index on
   // the path, -1 if not on it; first_node, last_node: the path's first and
   // last real nodes): its nodes are on the path, and each of its edges joins
@@ -648,7 +554,7 @@ namespace ribbon {
   }
 
   // Called once all cells of the graph have their paths: takes a cell off a
-  // novel path (its own copy of the prediction is dropped) when the cell's
+  // path (its own copy of the prediction is dropped) when the cell's
   // reads do not single it out: each transfrag of the cell that fits the path
   // also fits another chain of the graph with more pooled coverage (a weak
   // path is explained away by a chain that is strong in the pool, even one
@@ -700,17 +606,15 @@ namespace ribbon {
 
     // Only chains that will survive the coverage cutoff can shadow another:
     // their copies' coverage summed over the cells (as merge_cell_copies
-    // does) reaches min_read_coverage, or a guide has the chain.
+    // does) reaches min_read_coverage.
     std::vector<double> chain_coverage(chain_count, 0);
-    std::vector<bool> chain_is_guide(chain_count, false);
     for (int32_t p = first_prediction; p < prediction_count; p++) {
       if (path_of_prediction[p] < 0 || !predictions[p]->flag) continue;
       int32_t u = chain_of_path[path_of_prediction[p]];
       chain_coverage[u] += predictions[p]->cov;
-      if (predictions[p]->t_eq) chain_is_guide[u] = true;
     }
     auto can_shadow = [&](int32_t u) {
-      return chain_is_guide[u] || chain_coverage[u] >= min_read_coverage;
+      return chain_coverage[u] >= min_read_coverage;
     };
 
     // Which read transfrags (no source or sink links, none made by guides)
@@ -754,11 +658,11 @@ namespace ribbon {
       return total;
     };
 
-    // Take each cell off the novel paths its reads do not single out.
+    // Take each cell off the paths its reads do not single out.
     for (int32_t p = first_prediction; p < prediction_count; p++) {
       CPrediction *prediction = predictions[p].get();
-      if (!prediction || !prediction->flag || prediction->t_eq
-          || path_of_prediction[p] < 0 || prediction->cell < 0)
+      if (!prediction || !prediction->flag || path_of_prediction[p] < 0
+          || prediction->cell < 0)
         continue;
       int32_t k = chain_of_path[path_of_prediction[p]];
       int32_t cell = prediction->cell;
@@ -799,12 +703,11 @@ namespace ribbon {
     }
   }
 
+  // Extracts the transcripts of one cell from the graph: its node coverages
+  // and transfrags first, then the greedy paths. Returns the updated
+  // gene_count.
   int32_t find_transcripts(const FlowContext& shared_context,
-                           int32_t gene_count,
-                           std::vector<CGuide>& matched_guides,
-                           std::vector<GffObj *>& guides,
-                           std::vector<int32_t>& guide_prediction,
-                           BitVec& low_cov_flags) {
+                           int32_t gene_count, BitVec& low_cov_flags) {
     // Graph and cell data shared through the context, with the transfrags of
     // this cell once we know them.
     FlowContext context = shared_context;
@@ -829,29 +732,30 @@ namespace ribbon {
         = list_cell_transfrags(context);
     context.cell_transfrags = &cell_transfrags;
 
+    // The links that guides made to the source and sink are no evidence of
+    // this cell: we count them as pooled evidence only, so that they do not
+    // end a path where this cell's reads go on. Their abundance is restored
+    // after the extraction.
+    std::vector<std::pair<int32_t, float>> guide_link_abundance;
+    for (int32_t t = 0; t < count_of(context.graph.transfrag); t++) {
+      CTransfrag *transfrag = context.graph.transfrag[t].get();
+      if (!transfrag->made_by_guide) continue;
+      guide_link_abundance.push_back(
+          {t, transfrag->cell_abundance[context.cell]});
+      transfrag->cell_abundance[context.cell] = 0;
+    }
+
     std::vector<float> node_rate = compute_cell_node_rates(context);
     context.node_rate = &node_rate;
 
-    // Set up the path bookkeeping; the guides claim their evidence first.
+    // Set up the path bookkeeping.
     BitVec transfrag_on_path(count_of(context.graph.transfrag));
     BitVec current_path_bits(context.graph.node_count
         + context.graph.edge_count);
 
     bool is_first_transcript = true;
 
-    if (count_of(matched_guides)) {
-      // What de novo would find in this cell, to credit the guides with.
-      PredictionList denovo_predictions = extract_cell_denovo_predictions(
-          context, seed_node, gene_count, node_coverage, current_path_bits,
-          cell_low_cov_flags);
-      seed_node = assign_flow_to_guides_and_pick_seed(context, matched_guides,
-          gene_count, predictions, node_coverage, transfrag_on_path, current_path_bits,
-          is_first_transcript, guides, guide_prediction);
-      credit_guides_found_by_denovo(context, matched_guides, guides, predictions,
-                                    guide_prediction, denovo_predictions);
-    }
-
-    // Extract the remaining transcripts greedily if enough coverage is left.
+    // Extract the transcripts greedily if enough coverage is left.
     if (node_coverage[seed_node] >= 1
         || node_coverage[seed_node] > ERROR_PERC) {
       BitVec used_node(context.graph.node_count + context.graph.edge_count);
@@ -862,6 +766,9 @@ namespace ribbon {
                                    current_path_bits, cell_low_cov_flags,
                                    prev_prediction_count);
     }
+
+    for (auto& [t, abundance] : guide_link_abundance)
+      context.graph.transfrag[t]->cell_abundance[context.cell] = abundance;
 
     return (gene_count);
   }

@@ -5,7 +5,9 @@
 // match_guide_to_graph finds a guide's exact exon/intron path among the nodes;
 // process_reference_guides matches and links every usable guide;
 // is_within_guide_exon tests an interval against the guide exons. The guide's
-// bundle status and its boundaries inside a pre-graph are also kept here.
+// bundle status is also kept here. Guides take no flow: they only add links to
+// the source and sink and backbone transfrags, and later label the
+// predictions that have their intron chain (predictions.cpp).
 
 namespace ribbon {
 
@@ -14,8 +16,7 @@ namespace ribbon {
   static const byte tx_status_mask = 0x03;
 
   // Returns the 2-bit bundle-processing status stored in guide's user flags:
-  // unused, in-bundle-but-not-fully-covered, all-introns-covered, or
-  // stored-for-printing.
+  // unused, in-bundle-but-not-fully-covered or all-introns-covered.
   GuideBundleStatus get_guide_status(GffObj *guide) {
     return (GuideBundleStatus)guide->getUserFlags(tx_status_mask);
   }
@@ -26,60 +27,27 @@ namespace ribbon {
     guide->setUserFlags(tx_status_mask & status); // can be 1, 2 or 0 (clear)
   }
 
-  // True if reads cover every intron of the guide (compute_guide_boundaries),
-  // so the guide is used to help build the graph.
+  // True if reads cover every intron of the guide (see
+  // mark_guides_with_covered_introns), so the guide is used to help build the
+  // graph.
   bool is_guide_supported_by_reads(GffObj *guide) {
     return get_guide_status(guide) >= GBST_ALL_INTR_COV;
   }
 
-  // Records the start and end boundaries (guide_boundaries) of every guide
-  // whose introns are all covered by reads (marking it GBST_ALL_INTR_COV) and
-  // gives guide_prediction (the prediction index of each guide) one slot per
-  // guide (-1 until find_transcripts sets it).
-  void compute_guide_boundaries(std::vector<GffObj *>& guides,
-                                std::vector<GuideBoundary>& guide_boundaries,
-                                std::vector<int32_t>& guide_prediction) {
-    // Adds a guide boundary to guide_boundaries. If one with the same position
-    // and strand exists, keeps the narrower exon (smaller exon_other_end for a
-    // start, larger for an end).
-    auto add_boundary = [&](uint32_t pos, uint32_t exon_other_end,
-                            char strand, bool is_start) {
-      GuideBoundary boundary(pos, exon_other_end, strand);
-      int32_t idx = find_sorted(guide_boundaries, boundary);
-      if (idx < 0) insert_sorted(guide_boundaries, boundary);
-      else if (is_start ? guide_boundaries[idx].exon_other_end > exon_other_end
-                        : guide_boundaries[idx].exon_other_end < exon_other_end)
-        guide_boundaries[idx].exon_other_end = exon_other_end;
-    };
-
-    for (int32_t guide = 0; guide < count_of(guides); guide++) {
-      guide_prediction.push_back(-1);
-
-      // Check whether every intron of the guide is covered by reads: use
-      // TranscriptCounts::transcript_introns[]->read_count.
+  // Marks each guide whose introns are all covered by reads GBST_ALL_INTR_COV:
+  // only those are matched to the graphs (is_guide_supported_by_reads).
+  void mark_guides_with_covered_introns(std::vector<GffObj *>& guides) {
+    for (GffObj *guide : guides) {
+      // Use TranscriptCounts::transcript_introns[]->read_count.
+      TranscriptCounts *tdata = (TranscriptCounts *)(guide->uptr);
       bool introns_are_covered = true;
-      TranscriptCounts *tdata = (TranscriptCounts *)(guides[guide]->uptr);
       for (int32_t i = 0; i < count_of(tdata->transcript_introns); i++) {
         if (!tdata->transcript_introns[i]->read_count) {
           introns_are_covered = false;
           break;
         }
       }
-      if (!introns_are_covered) continue;
-
-      // All introns are covered by long or short reads: add the guide start
-      // and end boundaries, on both strands if the guide strand is unknown.
-      set_guide_status(guides[guide], GBST_ALL_INTR_COV);
-      bool unknown_strand = guides[guide]->strand != '+'
-                            && guides[guide]->strand != '-';
-      for (char strand : {'-', '+'}) {
-        if (!unknown_strand && strand != guides[guide]->strand)
-          continue;
-        add_boundary(guides[guide]->start, guides[guide]->exons[0]->end,
-                     strand, true);
-        add_boundary(guides[guide]->end, guides[guide]->exons.Last()->start,
-                     strand, false);
-      }
+      if (introns_are_covered) set_guide_status(guide, GBST_ALL_INTR_COV);
     }
   }
 

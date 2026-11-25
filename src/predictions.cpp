@@ -17,7 +17,11 @@
 // too weakly covered (drop_weak_predictions), and the single exons that are
 // not transcripts of their own (drop_unsupported_single_exons). It also takes
 // cells off transcripts that a cell's own reads contradict
-// (drop_cells_with_competing_junctions). out.cpp only prints the result.
+// (drop_cells_with_competing_junctions). With guides, the predictions that
+// have a guide's intron chain are labeled with it first
+// (label_predictions_with_guides): the labeled ones get a lower coverage floor
+// and skip the overlap, weak-junction and UMI-start filters. out.cpp only
+// prints the result.
 
 // Import globals from main program:
 
@@ -567,18 +571,12 @@ namespace ribbon {
 
               // All genes overlap on the same strand now
 
-              // This is not a known gene -> only then we can eliminate it
-              if (!predictions[n2]->t_eq) {
-                // More strict about novel predictions if annotation is
-                // available
-                if (predictions[n1]->t_eq
-                    && predictions[n2]->cov < ERROR_PERC * predictions[n1]->cov) {
-                  predictions[n2]->flag = false;
-                  continue;
-                } else if (count_of(predictions[n2]->exons) == 1) {
-                  predictions[n2]->flag = false;
-                  continue;
-                }
+              // A novel single exon inside a better covered prediction is
+              // dropped; one with a guide's chain is never dropped here
+              if (!predictions[n2]->t_eq
+                  && count_of(predictions[n2]->exons) == 1) {
+                predictions[n2]->flag = false;
+                continue;
               }
 
               if (!predictions[n1]->t_eq && count_of(predictions[n1]->exons) == 1) {
@@ -618,29 +616,6 @@ namespace ribbon {
     for (auto& p : predictions) {
       float min_coverage = p->t_eq ? min_reference_coverage : min_read_coverage;
       if (p->flag && p->cov < min_coverage) p->flag = false;
-    }
-  }
-
-  // Gives each guide that no cell was credited with (de novo found it in no
-  // cell) the one cell where the flow gave it the most coverage, so that the
-  // guide keeps a cell.
-  void credit_best_cell_to_guides_without_cells(PredictionList& predictions) {
-    for (auto& p : predictions) {
-      if (!p->flag || p->flow_cov.empty()) continue;
-      bool has_cell = false;
-      for (float coverage : p->cell_cov)
-        if (coverage > 0) has_cell = true;
-      if (has_cell) continue;
-
-      // The cell with the most flow coverage
-      int32_t best_cell = 0;
-      for (int32_t c = 1; c < count_of(p->flow_cov); c++)
-        if (p->flow_cov[c] > p->flow_cov[best_cell]) best_cell = c;
-      if (p->flow_cov[best_cell] <= 0) continue;
-
-      p->cell_cov.resize(count_of(p->flow_cov), 0.0);
-      p->cell_cov[best_cell] = p->flow_cov[best_cell];
-      p->gene_no = 1;
     }
   }
 
@@ -786,17 +761,16 @@ namespace ribbon {
 
   // Takes a cell off each novel multi-exon prediction that has a competing
   // junction in that cell (see has_competing_junction). The coverage of the
-  // cell leaves the prediction, which is dropped when no cell is left.
-  // Reference predictions are not touched.
+  // cell leaves the prediction, which is dropped when no cell is left. This
+  // holds for predictions with a guide's chain too: the cell's own reads
+  // contradict them.
   void drop_cells_with_competing_junctions(BundleData *bundle,
                                            int32_t cell_count) {
     std::vector<CellJunctionReads> cell_reads
         = collect_cell_junction_reads(bundle, cell_count);
 
     for (auto& prediction : bundle->predictions) {
-      if (!prediction->flag || prediction->t_eq
-          || count_of(prediction->exons) < 2)
-        continue;
+      if (!prediction->flag || count_of(prediction->exons) < 2) continue;
 
       float removed_coverage = 0;
       bool has_cell_left = false;
@@ -958,17 +932,18 @@ namespace ribbon {
     return poisson_binomial_tail(chance, cells_inside) < single_exon_alpha;
   }
 
-  // Drops the novel single-exon predictions that do not look like transcripts
-  // of their own: those seen in no more cells than the reads around them explain
+  // Drops the single-exon predictions that do not look like transcripts of
+  // their own: those seen in no more cells than the reads around them explain
   // and, with --sq3, those with too few UMI molecules starting at their 5'
-  // end.
-  // Reference ones are kept. On the real data most dropped ones are unspliced
-  // pre-mRNA inside introns (ribbon_data/benchmark/README.md).
+  // end. Single exons with a guide are tested too: many annotated single exons
+  // are pseudogenes or retained introns (ribbon_data/benchmark/guides). On the
+  // real data most dropped ones are unspliced pre-mRNA inside introns
+  // (ribbon_data/benchmark/README.md).
   void drop_unsupported_single_exons(BundleData *bundle) {
     PredictionList& predictions = bundle->predictions;
     bool any = false;
     for (const auto& p : predictions)
-      if (p->flag && !p->t_eq && count_of(p->exons) == 1) any = true;
+      if (p->flag && count_of(p->exons) == 1) any = true;
     if (!any) return;
 
     // With --sq3: the 5' ends of the UMI read 1s of each strand
@@ -985,7 +960,7 @@ namespace ribbon {
     bool mitochondrial = is_mitochondrial(bundle->ref_seq);
 
     for (auto& p : predictions) {
-      if (!p->flag || p->t_eq || count_of(p->exons) != 1) continue;
+      if (!p->flag || count_of(p->exons) != 1) continue;
       if (!mitochondrial && !single_exon_stands_out(starts, *p)) {
         p->flag = false;
         continue;
@@ -1385,6 +1360,63 @@ namespace ribbon {
     }
   }
 
+  // True if the prediction has the intron chain of guide (same strand and
+  // number of exons); a single exon instead needs a single-exon guide that
+  // overlaps at least half of each.
+  bool has_guide_chain(const CPrediction& prediction, GffObj *guide) {
+    int32_t exon_count = count_of(prediction.exons);
+    if (guide->strand != prediction.strand
+        || guide->exons.Count() != exon_count)
+      return false;
+    if (exon_count == 1) {
+      int32_t overlap = std::min<int32_t>(guide->end, prediction.end)
+          - std::max<int32_t>(guide->start, prediction.start) + 1;
+      return 2 * overlap >= (int32_t)(guide->end - guide->start + 1)
+             && 2 * overlap >= (int32_t)(prediction.end - prediction.start + 1);
+    }
+    for (int32_t e = 0; e < exon_count; e++) {
+      if (e > 0 && prediction.exons[e].start != guide->exons[e]->start)
+        return false;
+      if (e + 1 < exon_count && prediction.exons[e].end != guide->exons[e]->end)
+        return false;
+    }
+    return true;
+  }
+
+  // Labels each prediction with the first guide (t_eq) that has its intron
+  // chain (has_guide_chain). The reads built the prediction; the guide only
+  // names it and lets it skip some filters (see finalize_predictions).
+  void label_predictions_with_guides(BundleData *bundle) {
+    std::vector<GffObj *>& guides = bundle->guides;
+    if (guides.empty()) return;
+    for (auto& p : bundle->predictions) {
+      if (!p || !p->flag || p->t_eq) continue;
+      // The guides are sorted by start
+      for (GffObj *guide : guides) {
+        if (guide->start > p->end) break;
+        if (guide->end < p->start) continue;
+        if (has_guide_chain(*p, guide)) {
+          p->t_eq = guide;
+          break;
+        }
+      }
+    }
+  }
+
+  // Gives each kept prediction with a guide the guide's start and end: the
+  // reads rarely cover a transcript's ends fully.
+  void snap_ends_to_guides(PredictionList& predictions) {
+    for (auto& p : predictions) {
+      if (!p || !p->flag || !p->t_eq
+          || count_of(p->exons) != p->t_eq->exons.Count())
+        continue;
+      p->tlen += (int32_t)p->start - (int32_t)p->t_eq->start
+          + (int32_t)p->t_eq->end - (int32_t)p->end;
+      p->start = p->exons.front().start = p->t_eq->start;
+      p->end = p->exons.back().end = p->t_eq->end;
+    }
+  }
+
   // Decides which predictions of the bundle are kept: sorts them by position,
   // merges the copies found in different cells, and clears the flag of the
   // ones that are dropped. The flagged predictions remain sorted by position
@@ -1392,6 +1424,10 @@ namespace ribbon {
   void finalize_predictions(BundleData *bundle) {
     PredictionList& predictions = bundle->predictions;
     sort_by(predictions, compare_prediction_by_position);
+
+    // Name the predictions that have a guide's intron chain, so that the
+    // filters below can treat them as known transcripts.
+    label_predictions_with_guides(bundle);
 
     // Cells are numbered in the order they were first seen.
     int32_t cell_count = count_of(bundle->cell_name);
@@ -1401,7 +1437,6 @@ namespace ribbon {
     drop_cells_with_competing_junctions(bundle, cell_count);
 
     // Every kept transcript has at least one cell.
-    credit_best_cell_to_guides_without_cells(predictions);
     drop_predictions_without_cells(predictions);
 
     // Filter overlapping predictions, from the most covered to the least.
@@ -1419,6 +1454,9 @@ namespace ribbon {
 
     // Novel spliced transcripts need distinct evidence for each junction.
     drop_paths_with_weak_junctions(bundle);
+
+    // The kept transcripts with a guide take its ends.
+    snap_ends_to_guides(predictions);
 
     // With --quant, shared coverage re-split between each cell's transcripts.
     resplit_quant_coverage(bundle);

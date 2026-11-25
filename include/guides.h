@@ -21,9 +21,7 @@ namespace ribbon {
 
   void set_guide_status(GffObj *guide, GuideBundleStatus status);
 
-  void compute_guide_boundaries(std::vector<GffObj *>& guides,
-                                std::vector<GuideBoundary>& guide_boundaries,
-                                std::vector<int32_t>& guide_prediction);
+  void mark_guides_with_covered_introns(std::vector<GffObj *>& guides);
 
   int32_t count_guides_overlapping_pre_graph(std::vector<GffObj *>& guides,
                                              char strand_char,
